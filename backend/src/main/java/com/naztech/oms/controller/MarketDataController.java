@@ -1,0 +1,93 @@
+package com.naztech.oms.controller;
+
+import com.naztech.oms.api.Dtos.*;
+import com.naztech.oms.entity.Security;
+import com.naztech.oms.entity.Trade;
+import com.naztech.oms.repo.SecurityRepo;
+import com.naztech.oms.repo.TradeRepo;
+import com.naztech.oms.service.MarketDataGateway;
+import com.naztech.oms.service.MarketDataService;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@RestController
+@RequestMapping("/api/market")
+public class MarketDataController {
+
+    private final MarketDataService market;
+    private final MarketDataGateway depthGateway;
+    private final TradeRepo tradeRepo;
+    private final SecurityRepo securityRepo;
+
+    public MarketDataController(MarketDataService market, MarketDataGateway depthGateway,
+                               TradeRepo tradeRepo, SecurityRepo securityRepo) {
+        this.market = market;
+        this.depthGateway = depthGateway;
+        this.tradeRepo = tradeRepo;
+        this.securityRepo = securityRepo;
+    }
+
+    @GetMapping("/watch")
+    public List<MarketRow> watch(@RequestParam(defaultValue = "DSE") String exchange) {
+        return market.watch(exchange, false);
+    }
+
+    @GetMapping("/movers")
+    public Map<String, List<MarketRow>> movers(@RequestParam(defaultValue = "DSE") String exchange) {
+        return market.movers(exchange);
+    }
+
+    @GetMapping("/indices")
+    public List<MarketRow> indices() { return market.indices(); }
+
+    @GetMapping("/{securityId}/depth")
+    public Depth depth(@PathVariable Long securityId,
+                       @RequestParam(defaultValue = "5") int levels) {
+        return depthGateway.depth(securityId, levels);
+    }
+
+    @GetMapping("/{securityId}/candles")
+    public List<com.naztech.oms.api.Dtos.Candle> candles(@PathVariable Long securityId,
+                                                         @RequestParam(defaultValue = "5m") String tf,
+                                                         @RequestParam(defaultValue = "120") int limit) {
+        int bucket = switch (tf) {
+            case "1m" -> 60; case "5m" -> 300; case "15m" -> 900; case "1h" -> 3600;
+            case "1d" -> 86400; default -> 300;
+        };
+        return market.candles(securityId, bucket, limit);
+    }
+
+    @GetMapping("/{securityId}/trades")
+    public List<TradeTick> trades(@PathVariable Long securityId) {
+        Security s = securityRepo.findById(securityId).orElse(null);
+        String sym = s == null ? "?" : s.getSymbol();
+        return tradeRepo.findTop100BySecurityIdOrderByExecutedAtDesc(securityId).stream()
+                .map(t -> new TradeTick(securityId, sym, t.getPrice(), t.getQuantity(),
+                        t.getAggressorSide(), t.getExecutedAt() == null ? null : t.getExecutedAt().toString()))
+                .collect(Collectors.toList());
+    }
+
+    @GetMapping("/tape")
+    public List<TradeTick> tape() {
+        Map<Long, Security> secs = securityRepo.findAll().stream()
+                .collect(Collectors.toMap(Security::getId, x -> x));
+        return tradeRepo.findTop200ByOrderByExecutedAtDesc().stream()
+                .map(t -> {
+                    Security s = secs.get(t.getSecurityId());
+                    return new TradeTick(t.getSecurityId(), s == null ? "?" : s.getSymbol(),
+                            t.getPrice(), t.getQuantity(), t.getAggressorSide(),
+                            t.getExecutedAt() == null ? null : t.getExecutedAt().toString());
+                })
+                .collect(Collectors.toList());
+    }
+
+    /** Ingest endpoint for the Python feed (bdshare / simulator). */
+    @PostMapping("/ingest")
+    public Map<String, Object> ingest(@RequestBody IngestRequest req) {
+        int n = market.ingest(req.quotes());
+        return Map.of("ingested", n);
+    }
+}

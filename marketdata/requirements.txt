@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+requests
+httpx
+SQLAlchemy
+PyMySQL
+APScheduler
+bdshare

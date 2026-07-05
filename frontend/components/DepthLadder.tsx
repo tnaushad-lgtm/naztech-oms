@@ -1,0 +1,78 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { get } from "@/lib/api";
+import { nf, nfInt } from "@/lib/format";
+
+type Level = { price: number; quantity: number; orders: number };
+type Depth = { symbol: string; ltp: number; bids: Level[]; asks: Level[] };
+
+export function DepthLadder({ securityId, onPickPrice }: { securityId: number; onPickPrice: (p: number) => void }) {
+  const [depth, setDepth] = useState<Depth | null>(null);
+
+  useEffect(() => {
+    if (!securityId) return;
+    let stop = false;
+    const load = async () => {
+      try { const d = await get<Depth>(`/api/market/${securityId}/depth?levels=6`); if (!stop) setDepth(d); } catch {}
+    };
+    load(); const t = setInterval(load, 2000);
+    return () => { stop = true; clearInterval(t); };
+  }, [securityId]);
+
+  const max = Math.max(
+    1,
+    ...(depth?.bids || []).map((b) => b.quantity),
+    ...(depth?.asks || []).map((a) => a.quantity)
+  );
+
+  const Row = ({ lvl, side }: { lvl: Level; side: "bid" | "ask" }) => (
+    <button onClick={() => onPickPrice(lvl.price)}
+      className="relative grid grid-cols-3 items-center px-2 py-1 text-[12px] tnum hover:bg-surface/[0.07]">
+      <div className={`absolute inset-y-0 ${side === "bid" ? "right-0 bg-bull/10" : "left-0 bg-bear/10"}`}
+        style={{ width: `${(lvl.quantity / max) * 100}%` }} />
+      {side === "bid" ? (
+        <>
+          <span className="relative z-10 text-left text-ink-500">{lvl.orders}</span>
+          <span className="relative z-10 text-right text-ink-300">{nfInt(lvl.quantity)}</span>
+          <span className="relative z-10 text-right font-semibold text-bull">{nf(lvl.price)}</span>
+        </>
+      ) : (
+        <>
+          <span className="relative z-10 text-left font-semibold text-bear">{nf(lvl.price)}</span>
+          <span className="relative z-10 text-left text-ink-300">{nfInt(lvl.quantity)}</span>
+          <span className="relative z-10 text-right text-ink-500">{lvl.orders}</span>
+        </>
+      )}
+    </button>
+  );
+
+  return (
+    <div className="glass p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="panel-title">Market Depth</div>
+        <div className="text-[11px] text-ink-500">LTP <span className="tnum text-ink-200">{nf(depth?.ltp || 0)}</span></div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <div className="grid grid-cols-3 px-2 pb-1 text-[10px] uppercase tracking-wider text-ink-600">
+            <span>Ord</span><span className="text-right">Qty</span><span className="text-right">Bid</span>
+          </div>
+          <div className="flex flex-col">
+            {(depth?.bids || []).map((b, i) => <Row key={i} lvl={b} side="bid" />)}
+            {!depth?.bids?.length && <div className="px-2 py-3 text-center text-[11px] text-ink-600">No bids</div>}
+          </div>
+        </div>
+        <div>
+          <div className="grid grid-cols-3 px-2 pb-1 text-[10px] uppercase tracking-wider text-ink-600">
+            <span>Ask</span><span>Qty</span><span className="text-right">Ord</span>
+          </div>
+          <div className="flex flex-col">
+            {(depth?.asks || []).map((a, i) => <Row key={i} lvl={a} side="ask" />)}
+            {!depth?.asks?.length && <div className="px-2 py-3 text-center text-[11px] text-ink-600">No asks</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

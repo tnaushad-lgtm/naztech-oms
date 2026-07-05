@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:#ffffff}
+  svg{--bg2:#F5F6FB;--b:#D7DBEA;--t:#454B63;--text-primary:#171A24;--text-secondary:#545A70;--text-muted:#7C8398;display:block}
+  .diagram{--lane1:#6D5EF0;--lane2:#1FA06A}
+  .box{fill:var(--bg2);stroke:var(--b);stroke-width:1.5}
+  .strip1{fill:var(--lane1)} .strip2{fill:var(--lane2)}
+  .t1{fill:var(--text-primary);font-size:13px;font-weight:600}
+  .t2{fill:var(--text-secondary);font-size:10.5px}
+  .lbl{fill:var(--text-primary);font-size:12.5px;font-weight:700}
+  .title{fill:var(--text-primary);font-size:16px;font-weight:700}
+  .cap{fill:var(--text-muted);font-size:11px}
+  .arw{stroke:var(--t);stroke-width:1.7;fill:none;marker-end:url(#ah)}
+</style>
+</head>
+<body>
+<svg width="1720" height="744" viewBox="0 0 860 372" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,system-ui,-apple-system,sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="var(--t)"/>
+    </marker>
+  </defs>
+  <g class="diagram">
+    <text class="title" x="430" y="28" text-anchor="middle">How the terminal gets live data — two separate channels</text>
+    <rect class="strip1" x="243" y="42" width="12" height="12" rx="2"/>
+    <text class="t2" x="261" y="52">ITCH — market data in</text>
+    <rect class="strip2" x="470" y="42" width="12" height="12" rx="2"/>
+    <text class="t2" x="488" y="52">FIX — orders out</text>
+
+    <text class="lbl" x="70" y="88">1.  Market data IN  —  makes the numbers move on screen</text>
+    <rect class="box" x="70" y="102" width="150" height="64" rx="10"/><rect class="strip1" x="70" y="102" width="150" height="5" rx="2"/>
+    <text class="t1" x="145" y="132" text-anchor="middle">ITCH feed</text><text class="t2" x="145" y="150" text-anchor="middle">sim now &#183; DSE later</text>
+    <rect class="box" x="260" y="102" width="150" height="64" rx="10"/><rect class="strip1" x="260" y="102" width="150" height="5" rx="2"/>
+    <text class="t1" x="335" y="132" text-anchor="middle">Decode + book</text><text class="t2" x="335" y="150" text-anchor="middle">real ITCH binary wire</text>
+    <rect class="box" x="450" y="102" width="150" height="64" rx="10"/><rect class="strip1" x="450" y="102" width="150" height="5" rx="2"/>
+    <text class="t1" x="525" y="132" text-anchor="middle">Market-Data svc</text><text class="t2" x="525" y="150" text-anchor="middle">price &#183; trades &#183; index</text>
+    <rect class="box" x="640" y="102" width="150" height="64" rx="10"/><rect class="strip1" x="640" y="102" width="150" height="5" rx="2"/>
+    <text class="t1" x="715" y="132" text-anchor="middle">Your terminal</text><text class="t2" x="715" y="150" text-anchor="middle">watch &#183; chart &#183; depth</text>
+    <line class="arw" x1="222" y1="134" x2="258" y2="134"/><line class="arw" x1="412" y1="134" x2="448" y2="134"/><line class="arw" x1="602" y1="134" x2="638" y2="134"/>
+
+    <text class="lbl" x="70" y="234">2.  Orders OUT  —  when you press Buy / Sell</text>
+    <rect class="box" x="70" y="248" width="150" height="64" rx="10"/><rect class="strip2" x="70" y="248" width="150" height="5" rx="2"/>
+    <text class="t1" x="145" y="278" text-anchor="middle">Order ticket</text><text class="t2" x="145" y="296" text-anchor="middle">you place the order</text>
+    <rect class="box" x="260" y="248" width="150" height="64" rx="10"/><rect class="strip2" x="260" y="248" width="150" height="5" rx="2"/>
+    <text class="t1" x="335" y="278" text-anchor="middle">FIX engine</text><text class="t2" x="335" y="296" text-anchor="middle">QuickFIX/J &#183; 35=D</text>
+    <rect class="box" x="450" y="248" width="150" height="64" rx="10"/><rect class="strip2" x="450" y="248" width="150" height="5" rx="2"/>
+    <text class="t1" x="525" y="278" text-anchor="middle">FIXSIM exchange</text><text class="t2" x="525" y="296" text-anchor="middle">real DSE later</text>
+    <rect class="box" x="640" y="248" width="150" height="64" rx="10"/><rect class="strip2" x="640" y="248" width="150" height="5" rx="2"/>
+    <text class="t1" x="715" y="278" text-anchor="middle">Fills &#8594; blotter</text><text class="t2" x="715" y="296" text-anchor="middle">ExecutionReport back</text>
+    <line class="arw" x1="222" y1="280" x2="258" y2="280"/><line class="arw" x1="412" y1="280" x2="448" y2="280"/><line class="arw" x1="602" y1="280" x2="638" y2="280"/>
+
+    <text class="cap" x="70" y="344">DSE is closed &#8594; the data is simulated, but it flows through the exact real pipeline. Live values push every ~1&#8211;2s (SSE + polling).</text>
+  </g>
+</svg>
+</body>
+</html>

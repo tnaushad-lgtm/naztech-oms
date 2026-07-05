@@ -1,0 +1,48 @@
+# ---- secrets (never commit API keys) ----
+secrets.properties
+**/secrets.properties
+.env
+*.local
+
+# ---- Java / Maven ----
+target/
+*.class
+
+# ---- AI embedding cache ----
+*.bin
+oms-embeddings-cache.bin
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+
+# ---- misc ----
+.DS_Store
+nohup.out
+~$*
+*.zip
+
+# QuickFIX/J runtime (session store + FIX message logs)
+backend/fixlog/
+backend/fixstore/
+fixlog/
+fixstore/
+
+# ITCH session captures (binary market-data recordings)
+backend/itchlog/
+itchlog/
+*.itch
+
+# downloaded runtime tool (not source — fetched by share-cloudflare.bat)
+cloudflared.exe
+
+# credential-bearing deliverables — contain a live FIXSIM login, never commit
+docs/exchange-connectivity/build_fix_itch_summary.py
+docs/exchange-connectivity/Naztech_OMS_FIX_ITCH_Connectivity_Summary.docx

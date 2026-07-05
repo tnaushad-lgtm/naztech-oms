@@ -1,0 +1,46 @@
+# ============================================================================
+#  Exchange connectivity (FIX order-entry + ITCH market data).
+#  Switching FIXSIM <-> DSE-cert <-> DSE-prod is CONFIG-ONLY — no code changes.
+#  (Existing server/DB/JPA/AI settings remain in application.properties.)
+#
+#  SECURITY: the FIX password is NEVER put here. Set `fix.password` in the
+#  gitignored secrets.properties (already imported by application.properties):
+#      fix.password=<supplied out-of-band by IBCS-Primax / DSE>
+# ============================================================================
+
+exchange:
+  # simulator = in-process demo engine (default) | dse-cert | dse-prod = real DSE via FIX/ITCH
+  mode: simulator
+
+fix:
+  # Connect the FIX session? Currently pointed at the IBCS-Primax FIXSIM trial (expires 2026-07-10).
+  # This is independent of exchange.mode: the demo still runs on the simulator; the OMS just also
+  # logs on to FIXSIM in the background so we can prove real FIX connectivity. Set false to stop dialing.
+  enabled: ${FIX_ENABLED:true}
+  begin-string: FIXT.1.1                        # FIX 5.0 SP1 rides on FIXT.1.1 (matches DSE)
+  default-appl-ver-id: FIX.5.0SP1
+  host: ${FIX_HOST:172.200.171.157}            # FIXSIM demo endpoint
+  port: ${FIX_PORT:15000}
+  sender-comp-id: ${FIX_SENDER_COMP_ID:TareqN}      # OUR identity (reverse of FIXSIM's perspective)
+  target-comp-id: ${FIX_TARGET_COMP_ID:FIXSIMDEMO}  # the FIXSIM counterparty
+  username: ${FIX_USERNAME:}                    # FIXSIM logs on by CompID; leave blank unless it rejects
+  # password: -> secrets.properties only (key: fix.password). Never here, never in git.
+  heartbeat-int: 30
+  reset-seq-num-flag: true                      # reset sequence each logon — cleanest for sim testing
+  ssl: false
+  reconnect-seconds: 5
+
+itch:
+  enabled: false
+  transport: simulator                         # simulator | soupbintcp | moldudp64
+  host: ${ITCH_HOST:}
+  port: ${ITCH_PORT:0}
+  group: ${ITCH_MOLD_GROUP:}                    # multicast group (moldudp64)
+  tick-ms: ${ITCH_TICK_MS:1200}                 # scheduler cadence for the pull loop
+  seed: ${ITCH_SEED:20260703}                   # deterministic simulator seed
+  burst: ${ITCH_BURST:30}                        # messages per tick
+  replay: ${ITCH_REPLAY:false}
+  replay-file: ${ITCH_REPLAY_FILE:}             # a .itch capture to replay instead of simulating
+  record: ${ITCH_RECORD:false}                  # tee the live feed to a .itch capture
+  record-file: ${ITCH_RECORD_FILE:./itchlog/session.itch}
+  validate: ${ITCH_VALIDATE:false}             # log order-book invariant violations each tick

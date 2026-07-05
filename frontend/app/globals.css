@@ -1,0 +1,200 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   THEME PALETTES — each sets RGB channel triplets consumed by Tailwind tokens
+   (rgb(var(--token) / <alpha-value>)). Switch by setting data-theme on <html>.
+   --line / --surface are used (at low alpha) for borders & subtle fills, so they
+   flip to dark on the light theme automatically.
+   ========================================================================== */
+
+:root, [data-theme="midnight"] {
+  color-scheme: dark;
+  --obsidian-950: 6 7 13;     --obsidian-900: 10 12 22;   --obsidian-850: 14 17 30;
+  --obsidian-800: 19 23 38;   --obsidian-700: 27 33 51;   --obsidian-600: 37 44 66;
+  --ink-100: 238 242 255;     --ink-200: 215 221 240;     --ink-300: 194 201 224;
+  --ink-400: 154 163 196;     --ink-500: 107 116 148;     --ink-600: 74 82 110;
+  --aurora-violet: 139 92 246; --aurora-indigo: 99 102 241; --aurora-cyan: 34 211 238; --aurora-teal: 45 212 191;
+  --bull: 34 197 94;          --bear: 251 91 107;
+  --line: 255 255 255;        --surface: 255 255 255;
+  --bg-image:
+    radial-gradient(1100px 600px at 12% -8%, rgba(139,92,246,0.16), transparent 60%),
+    radial-gradient(1000px 560px at 100% 0%, rgba(34,211,238,0.12), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(45,212,191,0.10), transparent 60%);
+}
+
+[data-theme="daylight"] {
+  color-scheme: light;
+  --obsidian-950: 244 246 251; --obsidian-900: 249 250 253; --obsidian-850: 255 255 255;
+  --obsidian-800: 241 244 249; --obsidian-700: 229 233 242; --obsidian-600: 213 219 231;
+  --ink-100: 17 24 39;        --ink-200: 31 41 59;         --ink-300: 51 65 85;
+  --ink-400: 71 85 105;       --ink-500: 100 116 139;      --ink-600: 148 163 184;
+  --aurora-violet: 124 58 237; --aurora-indigo: 79 70 229; --aurora-cyan: 8 145 178; --aurora-teal: 13 148 136;
+  --bull: 22 163 74;          --bear: 220 38 38;
+  --line: 15 23 42;           --surface: 15 23 42;
+  --bg-image:
+    radial-gradient(1100px 600px at 12% -8%, rgba(124,58,237,0.08), transparent 60%),
+    radial-gradient(1000px 560px at 100% 0%, rgba(8,145,178,0.07), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(13,148,136,0.06), transparent 60%);
+}
+
+[data-theme="terminal"] {
+  color-scheme: dark;
+  --obsidian-950: 0 0 0;       --obsidian-900: 7 10 7;     --obsidian-850: 11 16 11;
+  --obsidian-800: 16 22 16;    --obsidian-700: 22 30 22;   --obsidian-600: 32 42 32;
+  --ink-100: 222 245 210;     --ink-200: 200 230 190;     --ink-300: 150 200 140;
+  --ink-400: 110 160 100;     --ink-500: 80 120 75;       --ink-600: 55 85 52;
+  --aurora-violet: 245 158 11; --aurora-indigo: 217 119 6; --aurora-cyan: 132 204 22; --aurora-teal: 34 197 94;
+  --bull: 74 222 128;         --bear: 248 113 113;
+  --line: 132 204 22;         --surface: 132 204 22;
+  --bg-image:
+    radial-gradient(1000px 560px at 50% -10%, rgba(132,204,22,0.10), transparent 60%),
+    radial-gradient(900px 600px at 100% 100%, rgba(245,158,11,0.07), transparent 60%);
+}
+
+[data-theme="ocean"] {
+  color-scheme: dark;
+  --obsidian-950: 5 13 26;     --obsidian-900: 8 19 36;    --obsidian-850: 11 26 48;
+  --obsidian-800: 15 33 59;    --obsidian-700: 22 45 76;   --obsidian-600: 32 60 96;
+  --ink-100: 226 240 252;     --ink-200: 200 222 242;     --ink-300: 170 200 226;
+  --ink-400: 130 165 196;     --ink-500: 92 124 156;      --ink-600: 64 92 122;
+  --aurora-violet: 56 189 248; --aurora-indigo: 14 165 233; --aurora-cyan: 45 212 191; --aurora-teal: 34 211 238;
+  --bull: 16 185 129;         --bear: 244 63 94;
+  --line: 125 211 252;        --surface: 125 211 252;
+  --bg-image:
+    radial-gradient(1100px 600px at 10% -8%, rgba(14,165,233,0.18), transparent 60%),
+    radial-gradient(1000px 560px at 100% 0%, rgba(45,212,191,0.14), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(56,189,248,0.10), transparent 60%);
+}
+
+[data-theme="sunset"] {
+  color-scheme: dark;
+  --obsidian-950: 18 8 16;     --obsidian-900: 26 12 22;   --obsidian-850: 34 16 30;
+  --obsidian-800: 43 21 38;    --obsidian-700: 56 28 49;   --obsidian-600: 74 38 64;
+  --ink-100: 253 240 245;     --ink-200: 245 220 230;     --ink-300: 232 196 212;
+  --ink-400: 200 160 180;     --ink-500: 160 120 142;     --ink-600: 120 84 104;
+  --aurora-violet: 244 114 182; --aurora-indigo: 251 113 133; --aurora-cyan: 251 146 60; --aurora-teal: 245 158 11;
+  --bull: 52 211 153;         --bear: 244 63 94;
+  --line: 251 146 60;         --surface: 251 191 160;
+  --bg-image:
+    radial-gradient(1100px 600px at 12% -8%, rgba(244,114,182,0.16), transparent 60%),
+    radial-gradient(1000px 560px at 100% 0%, rgba(251,146,60,0.14), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(251,113,133,0.10), transparent 60%);
+}
+
+html, body { height: 100%; }
+
+body {
+  @apply bg-obsidian-950 text-ink-100 antialiased;
+  font-feature-settings: "cv11", "ss01";
+  background-image: var(--bg-image);
+  background-attachment: fixed;
+  transition: background-color .25s ease, color .25s ease;
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+@layer components {
+  .glass {
+    @apply bg-obsidian-850/70 backdrop-blur-xl border border-line/[0.1] rounded-2xl shadow-panel;
+  }
+  .glass-soft {
+    @apply bg-surface/[0.04] backdrop-blur-md border border-line/[0.08] rounded-xl;
+  }
+  .panel-title {
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-400;
+  }
+  .aurora-text {
+    @apply bg-gradient-to-r from-aurora-violet via-aurora-indigo to-aurora-cyan bg-clip-text text-transparent;
+  }
+  .aurora-btn {
+    @apply relative inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold
+           text-white transition-all duration-200
+           bg-gradient-to-r from-aurora-violet to-aurora-indigo
+           hover:shadow-glow hover:brightness-110 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .ghost-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium
+           text-ink-300 border border-line/[0.12] bg-surface/[0.03]
+           hover:bg-surface/[0.08] hover:text-ink-100 transition-colors;
+  }
+  .field {
+    @apply w-full rounded-xl bg-obsidian-900/80 border border-line/[0.12] px-3 py-2 text-sm
+           text-ink-100 placeholder-ink-500 outline-none
+           focus:border-aurora-indigo/60 focus:ring-2 focus:ring-aurora-indigo/20 transition;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide;
+  }
+}
+
+/* react-grid-layout theming */
+.react-grid-item.react-grid-placeholder {
+  background: rgb(var(--aurora-violet) / 0.18) !important;
+  border: 1px dashed rgb(var(--aurora-violet) / 0.5);
+  border-radius: 1rem; opacity: 1;
+}
+.react-grid-item.react-draggable-dragging { z-index: 30; transition: none; }
+.react-grid-item > .react-resizable-handle { width: 18px; height: 18px; }
+.react-grid-item > .react-resizable-handle::after {
+  content: ""; position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px;
+  border-right: 2px solid rgba(148,163,184,0.45); border-bottom: 2px solid rgba(148,163,184,0.45);
+}
+.recharts-default-tooltip {
+  background: rgb(var(--obsidian-850) / 0.97) !important;
+  border: 1px solid rgb(var(--line) / 0.12) !important; border-radius: 10px !important;
+}
+
+/* FlexLayout docking — themed via our CSS variables so it follows the active theme */
+.flexlayout__layout {
+  --color-text: rgb(var(--ink-300));
+  --color-background: transparent;
+  --color-base: transparent;
+  --color-1: rgb(var(--obsidian-900));
+  --color-2: rgb(var(--obsidian-850));
+  --color-3: rgb(var(--obsidian-800));
+  --color-tabset-background: transparent;
+  --color-tabset-background-selected: transparent;
+  --color-tabset-background-maximized: rgb(var(--obsidian-950));
+  --color-tabset-header-background: rgb(var(--obsidian-900) / 0.5);
+  --color-tabset-header: rgb(var(--ink-300));
+  --color-tabset-divider-line: rgb(var(--line) / 0.1);
+  --color-border-background: rgb(var(--obsidian-900) / 0.5);
+  --color-border-divider-line: rgb(var(--line) / 0.1);
+  --color-tab-selected: #ffffff;
+  --color-tab-selected-background: rgb(var(--aurora-indigo) / 0.20);
+  --color-tab-unselected: rgb(var(--ink-500));
+  --color-tab-unselected-background: transparent;
+  --color-splitter: rgb(var(--line) / 0.07);
+  --color-splitter-hover: rgb(var(--aurora-indigo) / 0.5);
+  --color-splitter-drag: rgb(var(--aurora-violet));
+  --color-drag-rect-border: rgb(var(--aurora-violet));
+  --color-drag-rect-background: rgb(var(--aurora-violet) / 0.15);
+  --color-drag-rect: #ffffff;
+  --color-edge-marker: rgb(var(--aurora-cyan));
+  --color-edge-marker-background: rgb(var(--aurora-cyan) / 0.3);
+  font-family: inherit;
+}
+.flexlayout__tab { background: transparent !important; padding: 4px; }
+.flexlayout__tabset { border-radius: 12px; }
+.flexlayout__tab_button { border-radius: 8px 8px 0 0; font-size: 12px; font-weight: 600; }
+.flexlayout__tab_button--selected { box-shadow: inset 0 -2px 0 0 rgb(var(--aurora-cyan)); }
+
+/* print / save-as-PDF — show only the .printable region on white */
+@media print {
+  body { background: #fff !important; color: #111 !important; }
+  body * { visibility: hidden !important; }
+  .printable, .printable * { visibility: visible !important; }
+  .printable { position: absolute; left: 0; top: 0; width: 100%; padding: 16px; color: #111 !important; }
+  .printable .glass, .printable .glass-soft { background: #fff !important; border-color: #ddd !important; box-shadow: none !important; }
+  .printable table { color: #111 !important; }
+  .printable th, .printable td { border-bottom: 1px solid #ddd !important; }
+  .no-print { display: none !important; }
+}
+
+/* sleek scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.18); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.32); }

@@ -1,0 +1,161 @@
+package com.naztech.oms.service;
+
+import com.naztech.oms.api.Dtos.RiskResult;
+import com.naztech.oms.entity.*;
+import com.naztech.oms.repo.*;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Pre-trade risk controls (RFP "Risk Management"): broker/trader/client limits,
+ * buying-power & holdings checks, wash-sale block, single-order caps. Returns a
+ * hard pass/reject plus the explainable AI risk score for the order.
+ */
+@Service
+public class RiskService {
+
+    private static final List<String> RESTING = List.of("OPEN", "PARTIAL");
+
+    private final SecurityRepo securityRepo;
+    private final RiskLimitRepo limitRepo;
+    private final ClientAccountRepo accountRepo;
+    private final HoldingRepo holdingRepo;
+    private final MarketDataRepo marketRepo;
+    private final OmsOrderRepo orderRepo;
+    private final BrokerRepo brokerRepo;
+    private final AiRiskScoringService ai;
+
+    public RiskService(SecurityRepo securityRepo, RiskLimitRepo limitRepo, ClientAccountRepo accountRepo,
+                       HoldingRepo holdingRepo, MarketDataRepo marketRepo, OmsOrderRepo orderRepo,
+                       BrokerRepo brokerRepo, AiRiskScoringService ai) {
+        this.securityRepo = securityRepo;
+        this.limitRepo = limitRepo;
+        this.accountRepo = accountRepo;
+        this.holdingRepo = holdingRepo;
+        this.marketRepo = marketRepo;
+        this.orderRepo = orderRepo;
+        this.brokerRepo = brokerRepo;
+        this.ai = ai;
+    }
+
+    public RiskResult check(OmsOrder o) {
+        Security sec = securityRepo.findById(o.getSecurityId()).orElse(null);
+        if (sec == null) return reject("Unknown security");
+        // RMS kill-switch: a halted/suspended broker cannot trade
+        Broker br = o.getBrokerId() == null ? null : brokerRepo.findById(o.getBrokerId()).orElse(null);
+        if (br != null && !"ACTIVE".equals(br.getStatus()))
+            return reject("Broker trading halted by RMS kill-switch (" + br.getStatus() + ")");
+        if (!"ACTIVE".equals(sec.getStatus())) return reject("Security is " + sec.getStatus() + " — trading not allowed");
+        if ("INDEX".equals(sec.getAssetClass())) return reject("Indices are not tradable");
+
+        long qty = o.getQuantity() == null ? 0 : o.getQuantity();
+        if (qty <= 0) return reject("Quantity must be positive");
+        if (sec.getLotSize() != null && sec.getLotSize() > 1 && qty % sec.getLotSize() != 0)
+            return reject("Quantity must be a multiple of lot size " + sec.getLotSize());
+
+        MarketData md = marketRepo.findById(o.getSecurityId()).orElse(null);
+        BigDecimal ltp = md == null || md.getLtp() == null ? BigDecimal.ZERO : md.getLtp();
+        BigDecimal refPx = ("MARKET".equalsIgnoreCase(o.getOrderType()) || o.getPrice() == null
+                || o.getPrice().signum() == 0) ? ltp : o.getPrice();
+        BigDecimal notional = refPx.multiply(BigDecimal.valueOf(qty));
+
+        ClientAccount acc = accountRepo.findById(o.getAccountId()).orElse(null);
+        if (acc == null) return reject("Unknown client account");
+
+        // ---- limit checks across applicable scopes ----
+        BigDecimal effMaxOrderValue = null;
+        RiskLimit client = limit("CLIENT", o.getAccountId());
+        RiskLimit trader = o.getDealerId() == null ? null : limit("TRADER", o.getDealerId());
+        RiskLimit broker = limit("BROKER", o.getBrokerId());
+        for (RiskLimit l : new RiskLimit[]{client, trader, broker}) {
+            if (l == null || !Boolean.TRUE.equals(l.getEnabled())) continue;
+            if (l.getMaxOrderQty() != null && l.getMaxOrderQty() > 0 && qty > l.getMaxOrderQty())
+                return reject(l.getScope() + " order-qty limit exceeded (" + qty + " > " + l.getMaxOrderQty() + ")");
+            if (l.getMaxOrderValue() != null && l.getMaxOrderValue().signum() > 0
+                    && notional.compareTo(l.getMaxOrderValue()) > 0)
+                return reject(l.getScope() + " order-value limit exceeded (" + notional.toPlainString()
+                        + " > " + l.getMaxOrderValue().toPlainString() + ")");
+            if (effMaxOrderValue == null || (l.getMaxOrderValue() != null
+                    && l.getMaxOrderValue().signum() > 0 && l.getMaxOrderValue().compareTo(effMaxOrderValue) < 0))
+                effMaxOrderValue = l.getMaxOrderValue();
+        }
+
+        // ---- buying-power (BUY) / holdings (SELL) ----
+        if ("BUY".equals(o.getSide())) {
+            if (acc.getBuyingPower() != null && acc.getBuyingPower().compareTo(notional) < 0)
+                return reject("Insufficient buying power (need " + notional.toPlainString()
+                        + ", have " + acc.getBuyingPower().toPlainString() + ")");
+        } else if ("SELL".equals(o.getSide())) {
+            long held = holdingRepo.findByAccountIdAndSecurityId(o.getAccountId(), o.getSecurityId())
+                    .map(Holding::getQuantity).orElse(0L);
+            if (held < qty)
+                return reject("Insufficient holdings to sell (have " + held + ", sell " + qty + ")");
+        } else {
+            return reject("Invalid side: " + o.getSide());
+        }
+
+        // ---- wash-sale: opposite-side resting order, same client + security ----
+        String opposite = "BUY".equals(o.getSide()) ? "SELL" : "BUY";
+        int washCount = orderRepo.findWashCandidates(o.getAccountId(), o.getSecurityId(), opposite, RESTING).size();
+        boolean washBlock = client != null && Boolean.TRUE.equals(client.getWashSaleBlock());
+        if (washBlock && washCount > 0)
+            return reject("Wash-sale control: an opposite-side open order exists for this client/security");
+
+        // ---- explainable AI risk score (soft signal) ----
+        long dayVol = md == null || md.getVolume() == null ? 0 : md.getVolume();
+        AiRiskScoringService.Score s = ai.score(o, ltp, dayVol, washCount, effMaxOrderValue);
+
+        return new RiskResult(true, "OK", s.value(), s.flags());
+    }
+
+    /**
+     * Lighter re-check for amending a working order: security/broker/lot/limit caps + AI score.
+     * Skips buying-power & holdings (already validated and partially executed) to avoid double counting.
+     */
+    public RiskResult checkAmend(OmsOrder o) {
+        Security sec = securityRepo.findById(o.getSecurityId()).orElse(null);
+        if (sec == null) return reject("Unknown security");
+        Broker br = o.getBrokerId() == null ? null : brokerRepo.findById(o.getBrokerId()).orElse(null);
+        if (br != null && !"ACTIVE".equals(br.getStatus()))
+            return reject("Broker trading halted by RMS kill-switch (" + br.getStatus() + ")");
+        if (!"ACTIVE".equals(sec.getStatus())) return reject("Security is " + sec.getStatus());
+
+        long qty = o.getQuantity() == null ? 0 : o.getQuantity();
+        if (qty <= 0) return reject("Quantity must be positive");
+        if (sec.getLotSize() != null && sec.getLotSize() > 1 && qty % sec.getLotSize() != 0)
+            return reject("Quantity must be a multiple of lot size " + sec.getLotSize());
+
+        MarketData md = marketRepo.findById(o.getSecurityId()).orElse(null);
+        BigDecimal ltp = md == null || md.getLtp() == null ? BigDecimal.ZERO : md.getLtp();
+        BigDecimal refPx = (o.getPrice() == null || o.getPrice().signum() == 0) ? ltp : o.getPrice();
+        BigDecimal notional = refPx.multiply(BigDecimal.valueOf(qty));
+
+        BigDecimal effMax = null;
+        for (RiskLimit l : new RiskLimit[]{limit("CLIENT", o.getAccountId()),
+                o.getDealerId() == null ? null : limit("TRADER", o.getDealerId()), limit("BROKER", o.getBrokerId())}) {
+            if (l == null || !Boolean.TRUE.equals(l.getEnabled())) continue;
+            if (l.getMaxOrderQty() != null && l.getMaxOrderQty() > 0 && qty > l.getMaxOrderQty())
+                return reject(l.getScope() + " order-qty limit exceeded");
+            if (l.getMaxOrderValue() != null && l.getMaxOrderValue().signum() > 0 && notional.compareTo(l.getMaxOrderValue()) > 0)
+                return reject(l.getScope() + " order-value limit exceeded");
+            if (effMax == null || (l.getMaxOrderValue() != null && l.getMaxOrderValue().signum() > 0
+                    && l.getMaxOrderValue().compareTo(effMax) < 0)) effMax = l.getMaxOrderValue();
+        }
+        long dayVol = md == null || md.getVolume() == null ? 0 : md.getVolume();
+        AiRiskScoringService.Score s = ai.score(o, ltp, dayVol, 0, effMax);
+        return new RiskResult(true, "OK", s.value(), s.flags());
+    }
+
+    private RiskLimit limit(String scope, Long entityId) {
+        if (entityId == null) return null;
+        Optional<RiskLimit> l = limitRepo.findByScopeAndEntityId(scope, entityId);
+        return l.orElse(null);
+    }
+
+    private RiskResult reject(String reason) {
+        return new RiskResult(false, reason, BigDecimal.valueOf(100), List.of(reason));
+    }
+}
