@@ -65,6 +65,7 @@ public class LoadTestService {
     private final SecurityRepo securityRepo;
     private final ClientAccountRepo accountRepo;
     private final MarketDataRepo marketRepo;
+    private final OrderPhaseTimings timings;
 
     @Value("${exchange.mode:simulator}")
     private String exchangeMode;
@@ -76,11 +77,13 @@ public class LoadTestService {
     private volatile Run current = new Run();
 
     public LoadTestService(OrderService orders, SecurityRepo securityRepo,
-                           ClientAccountRepo accountRepo, MarketDataRepo marketRepo) {
+                           ClientAccountRepo accountRepo, MarketDataRepo marketRepo,
+                           OrderPhaseTimings timings) {
         this.orders = orders;
         this.securityRepo = securityRepo;
         this.accountRepo = accountRepo;
         this.marketRepo = marketRepo;
+        this.timings = timings;
     }
 
     /** Everything one run accumulates. Replaced wholesale at the start of the next run. */
@@ -117,6 +120,7 @@ public class LoadTestService {
         run.phase = "STARTING";
         run.latencies = new long[capacity(req)];
         current = run;
+        timings.reset();                       // the breakdown must describe THIS run, not the last one
         running.set(true);
 
         if (req.primeAccount()) {
@@ -159,6 +163,17 @@ public class LoadTestService {
         long[] lat = Arrays.copyOf(r.latencies, Math.min(r.latencyCount.get(), r.latencies.length));
         Arrays.sort(lat);
 
+        // Mean end-to-end minus the phases = what happens outside place(): the transaction commit
+        // (flush + fsync) and the proxy. Nothing inside the method can time that, and on a hot path
+        // it is exactly the sort of thing that turns out to be the bottleneck.
+        Map<String, Double> phases = new LinkedHashMap<>(timings.meanMillis());
+        if (!phases.isEmpty() && lat.length > 0) {
+            double meanTotalMs = Arrays.stream(lat).average().orElse(0) / 1_000_000.0;
+            double inMethod = phases.values().stream().mapToDouble(Double::doubleValue).sum();
+            phases.put("COMMIT", Math.max(0, round(meanTotalMs - inMethod, 2)));
+            phases.put("TOTAL", round(meanTotalMs, 2));
+        }
+
         return new LoadTest.Status(
                 live,
                 r.phase,
@@ -181,6 +196,7 @@ public class LoadTestService {
                         ? "FIX (" + exchangeMode + ")" : "in-process simulator",
                 req == null ? 0 : req.threads(),
                 dbPoolSize,
+                phases,
                 r.note);
     }
 

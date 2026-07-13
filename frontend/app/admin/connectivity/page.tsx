@@ -247,6 +247,19 @@ export default function Connectivity() {
                   <span>p95 {ltRun.p95Ms} ms · max {ltRun.maxMs} ms</span>
                   <span>{ltRun.threads} submitter threads · DB pool {ltRun.dbPoolSize}</span>
                 </div>
+                {ltRun.phaseMs && Object.keys(ltRun.phaseMs).length > 0 && (
+                  <div className="mt-3">
+                    <div className="panel-title mb-1.5">Where each order spends its time (mean ms)</div>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(ltRun.phaseMs).map(([phase, ms]: any) => (
+                        <span key={phase}
+                          className={`chip ${phase === "TOTAL" ? "bg-surface/[0.1] text-ink-300" : "bg-aurora-indigo/15 text-aurora-cyan"}`}>
+                          {phase} {ms} ms
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {ltRun.note && <div className="mt-2 text-[11.5px] text-ink-400">{ltRun.note}</div>}
                 {ltRun.rejectReasons && Object.keys(ltRun.rejectReasons).length > 0 && (
                   <div className="mt-2 text-[11.5px] text-bear">

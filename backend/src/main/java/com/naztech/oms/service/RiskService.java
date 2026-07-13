@@ -27,10 +27,11 @@ public class RiskService {
     private final OmsOrderRepo orderRepo;
     private final BrokerRepo brokerRepo;
     private final AiRiskScoringService ai;
+    private final RefDataCache refData;
 
     public RiskService(SecurityRepo securityRepo, RiskLimitRepo limitRepo, ClientAccountRepo accountRepo,
                        HoldingRepo holdingRepo, MarketDataRepo marketRepo, OmsOrderRepo orderRepo,
-                       BrokerRepo brokerRepo, AiRiskScoringService ai) {
+                       BrokerRepo brokerRepo, AiRiskScoringService ai, RefDataCache refData) {
         this.securityRepo = securityRepo;
         this.limitRepo = limitRepo;
         this.accountRepo = accountRepo;
@@ -39,12 +40,14 @@ public class RiskService {
         this.orderRepo = orderRepo;
         this.brokerRepo = brokerRepo;
         this.ai = ai;
+        this.refData = refData;
     }
 
     public RiskResult check(OmsOrder o) {
-        Security sec = securityRepo.findById(o.getSecurityId()).orElse(null);
+        Security sec = refData.security(o.getSecurityId()).orElse(null);
         if (sec == null) return reject("Unknown security");
-        // RMS kill-switch: a halted/suspended broker cannot trade
+        // RMS kill-switch: a halted/suspended broker cannot trade. Read fresh, never cached — a halt
+        // must bite the instant it is applied, whoever applied it and on whichever node. See RefDataCache.
         Broker br = o.getBrokerId() == null ? null : brokerRepo.findById(o.getBrokerId()).orElse(null);
         if (br != null && !"ACTIVE".equals(br.getStatus()))
             return reject("Broker trading halted by RMS kill-switch (" + br.getStatus() + ")");
@@ -98,15 +101,17 @@ public class RiskService {
         }
 
         // ---- wash-sale: opposite-side resting order, same client + security ----
+        // COUNT, not a fetch: this scans oms_order — the table that grows fastest under load — and
+        // the old version hydrated every matching row into an entity just to call size() on the list.
         String opposite = "BUY".equals(o.getSide()) ? "SELL" : "BUY";
-        int washCount = orderRepo.findWashCandidates(o.getAccountId(), o.getSecurityId(), opposite, RESTING).size();
+        long washCount = orderRepo.countWashCandidates(o.getAccountId(), o.getSecurityId(), opposite, RESTING);
         boolean washBlock = client != null && Boolean.TRUE.equals(client.getWashSaleBlock());
         if (washBlock && washCount > 0)
             return reject("Wash-sale control: an opposite-side open order exists for this client/security");
 
         // ---- explainable AI risk score (soft signal) ----
         long dayVol = md == null || md.getVolume() == null ? 0 : md.getVolume();
-        AiRiskScoringService.Score s = ai.score(o, ltp, dayVol, washCount, effMaxOrderValue);
+        AiRiskScoringService.Score s = ai.score(o, ltp, dayVol, (int) Math.min(washCount, Integer.MAX_VALUE), effMaxOrderValue);
 
         return new RiskResult(true, "OK", s.value(), s.flags());
     }

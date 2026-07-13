@@ -49,6 +49,14 @@ public class FixProperties {
     private boolean ssl = false;
     private int reconnectSeconds = 5;
 
+    /**
+     * Write the FIX message log on a background thread (same files, off the order's critical path).
+     * Set false to write synchronously — costs ~11ms per order, and only matters if the message log
+     * must survive a hard kill. Orders and fills are never at risk either way: they live in the
+     * database and the session store.
+     */
+    private boolean asyncLog = true;
+
     /** True once host+port are actually set, so we can fail fast instead of dialing a blank endpoint. */
     public boolean isConfigured() {
         return host != null && !host.isBlank() && port > 0;

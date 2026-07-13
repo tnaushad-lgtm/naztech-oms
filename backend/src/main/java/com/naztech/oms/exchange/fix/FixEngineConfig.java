@@ -60,7 +60,11 @@ public class FixEngineConfig {
         try {
             SessionSettings settings = buildSettings();
             MessageStoreFactory store = new MemoryStoreFactory();          // Phase 2 → durable JdbcStore
-            LogFactory logFactory = new FileLogFactory(settings);          // writes ./fixlog/*.event/.messages logs
+            // Same ./fixlog/*.event/.messages files, but written off the sending thread by default —
+            // a synchronous disk write inside the order path was the single biggest cost per order.
+            LogFactory logFactory = props.isAsyncLog()
+                    ? new AsyncLogFactory(new FileLogFactory(settings))
+                    : new FileLogFactory(settings);
             MessageFactory messageFactory = new DefaultMessageFactory();
             initiator = new SocketInitiator(application, store, settings, logFactory, messageFactory);
             initiator.start();

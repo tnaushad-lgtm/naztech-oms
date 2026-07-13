@@ -113,6 +113,25 @@ class LocalExchangeTest {
     }
 
     @Test
+    @DisplayName("a limit order away from the market rests: acked, but no fill until it is crossed")
+    void restsANonMarketableLimitOrder() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+
+        // BRACBANK is 47.80; a bid at 23.90 is nowhere near it, so a real venue would rest it.
+        OmsOrder order = order("ORD-1752400002222-333", "BUY", 1000L, new BigDecimal("23.9000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BRACBANK")), oms.sessionId);
+
+        Message ack = oms.next();
+        assertThat(ack.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.NEW);          // -> OPEN, working
+        assertThat(ack.getDouble(LeavesQty.FIELD)).isEqualTo(1000.0);
+
+        // Nothing further: no fill, so no trade is booked, no position moves, no tape is marked.
+        assertThat(oms.inbound.poll(2, TimeUnit.SECONDS))
+                .as("an order priced away from the market must not fill")
+                .isNull();
+    }
+
+    @Test
     @DisplayName("a market order fills at the reference price even though it carries no Price(44)")
     void fillsAMarketOrderAtTheReferencePrice() throws Exception {
         Oms oms = connect(50L, 150L, 400L);

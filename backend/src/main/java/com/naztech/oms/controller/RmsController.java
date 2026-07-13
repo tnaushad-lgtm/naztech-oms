@@ -7,6 +7,7 @@ import com.naztech.oms.repo.BrokerRepo;
 import com.naztech.oms.repo.RiskLimitRepo;
 import com.naztech.oms.service.AuditService;
 import com.naztech.oms.service.OrderService;
+import com.naztech.oms.service.RefDataCache;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -23,12 +24,15 @@ public class RmsController {
     private final BrokerRepo brokerRepo;
     private final OrderService orders;
     private final AuditService audit;
+    private final RefDataCache refData;
 
-    public RmsController(RiskLimitRepo limitRepo, BrokerRepo brokerRepo, OrderService orders, AuditService audit) {
+    public RmsController(RiskLimitRepo limitRepo, BrokerRepo brokerRepo, OrderService orders, AuditService audit,
+                         RefDataCache refData) {
         this.limitRepo = limitRepo;
         this.brokerRepo = brokerRepo;
         this.orders = orders;
         this.audit = audit;
+        this.refData = refData;
     }
 
     @GetMapping("/brokers")
@@ -41,6 +45,7 @@ public class RmsController {
         Broker b = brokerRepo.findById(id).orElseThrow();
         b.setStatus(halt ? "SUSPENDED" : "ACTIVE");
         brokerRepo.save(b);
+        refData.invalidate();   // a halt must bite on the NEXT order, not when a cache entry expires
         audit.audit(actor, halt ? "BROKER_HALT" : "BROKER_RESUME", "BROKER", String.valueOf(id), b.getName());
         return Map.of("brokerId", id, "status", b.getStatus());
     }
@@ -57,7 +62,9 @@ public class RmsController {
         if (body.getMtmLossLimit() != null) l.setMtmLossLimit(body.getMtmLossLimit());
         if (body.getWashSaleBlock() != null) l.setWashSaleBlock(body.getWashSaleBlock());
         if (body.getEnabled() != null) l.setEnabled(body.getEnabled());
-        return limitRepo.save(l);
+        RiskLimit saved = limitRepo.save(l);
+        refData.invalidate();   // ditto: an edited limit applies immediately
+        return saved;
     }
 
     /** Recent rejected or elevated-risk orders for the RMS alert feed. */

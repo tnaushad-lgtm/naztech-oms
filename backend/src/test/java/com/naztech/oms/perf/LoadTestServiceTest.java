@@ -64,7 +64,7 @@ class LoadTestServiceTest {
         MarketDataRepo marketRepo = mock(MarketDataRepo.class);
         when(marketRepo.findById(7L)).thenReturn(Optional.of(md));
 
-        loadTest = new LoadTestService(orders, securityRepo, accountRepo, marketRepo);
+        loadTest = new LoadTestService(orders, securityRepo, accountRepo, marketRepo, new OrderPhaseTimings());
         ReflectionTestUtils.setField(loadTest, "exchangeMode", "simulator");
         ReflectionTestUtils.setField(loadTest, "dbPoolSize", 10);
     }

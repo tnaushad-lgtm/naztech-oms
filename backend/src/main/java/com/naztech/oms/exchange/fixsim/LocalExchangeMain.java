@@ -1,5 +1,6 @@
 package com.naztech.oms.exchange.fixsim;
 
+import com.naztech.oms.exchange.fix.AsyncLogFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import quickfix.Acceptor;
@@ -70,7 +71,9 @@ public final class LocalExchangeMain {
     /** Builds the acceptor. Shared with the tests so they exercise the very same wiring. */
     public static Acceptor acceptor(LocalExchange exchange, SessionSettings settings) throws Exception {
         MessageStoreFactory store = new MemoryStoreFactory();
-        LogFactory logs = new FileLogFactory(settings);
+        // Same exchangelog/ files, written off the session thread: a synchronous disk write per
+        // message would throttle the venue and, with it, every order the OMS is trying to send.
+        LogFactory logs = new AsyncLogFactory(new FileLogFactory(settings));
         MessageFactory messages = new DefaultMessageFactory();
         return new SocketAcceptor(exchange, store, settings, logs, messages);
     }

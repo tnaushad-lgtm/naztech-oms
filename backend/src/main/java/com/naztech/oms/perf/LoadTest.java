@@ -61,6 +61,12 @@ public final class LoadTest {
             String routedVia,
             int threads,
             int dbPoolSize,
+            /**
+             * Mean ms per order inside {@code place()}, by phase, plus COMMIT — which is derived
+             * (total latency minus the phases), because the transaction commits after the method
+             * returns and so no timer inside it can see the flush and fsync.
+             */
+            Map<String, Double> phaseMs,
             String note) {
     }
 }

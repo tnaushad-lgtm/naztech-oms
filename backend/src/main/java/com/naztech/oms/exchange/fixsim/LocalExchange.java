@@ -206,9 +206,27 @@ public class LocalExchange implements Application {
         Resting order = new Resting(clOrdId, "EX-" + orderSeq.getAndIncrement(), symbol, side, qty, price);
         book.put(clOrdId, order);
 
-        log.info("NEW    {} {} {} x {} @ {} (tif={})", clOrdId, sideName(side), qty, symbol, price, tif);
-
         schedule(ackDelayMs, () -> send(ack(order), sid));
+
+        // Would this order actually trade? A real venue only fills a limit order that crosses the
+        // market — a BUY at 23.90 when the stock is 47.80 simply rests on the book until the market
+        // comes to it. Filling everything regardless (as this did originally) is not just unrealistic:
+        // it means a "resting" order still books a trade, moves a position and marks the tape, which
+        // quietly triples the write load of every order placed.
+        BigDecimal reference = ReferencePrices.of(symbol);
+        boolean marketable = ordType == OrdType.MARKET
+                || (side == Side.BUY ? price.compareTo(reference) >= 0 : price.compareTo(reference) <= 0);
+
+        // Per-order logging is DEBUG: this runs on the session's receive thread, and writing a line
+        // to a Windows console per order is slow enough to throttle the whole venue — at which point
+        // a throughput test measures how fast a cmd window scrolls, not how fast the OMS trades.
+        if (!marketable) {
+            log.debug("REST   {} {} {} x {} @ {} — away from the market ({}), resting on the book",
+                    clOrdId, sideName(side), qty, symbol, price, reference);
+            return;                                   // acked and working; it will sit here until cancelled
+        }
+
+        log.debug("NEW    {} {} {} x {} @ {} (tif={})", clOrdId, sideName(side), qty, symbol, price, tif);
 
         boolean immediate = tif == TimeInForce.IMMEDIATE_OR_CANCEL || tif == TimeInForce.FILL_OR_KILL;
         if (immediate || qty <= 1) {
@@ -216,7 +234,7 @@ public class LocalExchange implements Application {
             return;
         }
 
-        // Resting order: fill it in two clips so the OMS walks PARTIAL then FILLED.
+        // Marketable: fill it in two clips so the OMS walks PARTIAL then FILLED.
         long firstClip = qty / 2;
         schedule(ackDelayMs + partialFillDelayMs, () -> fill(order, firstClip, sid));
         schedule(ackDelayMs + finalFillDelayMs, () -> fill(order, order.leaves(), sid));
@@ -267,7 +285,7 @@ public class LocalExchange implements Application {
         if (complete) {
             o.done = true;
         }
-        log.info("FILL   {} {} @ {} ({}/{}){}", o.clOrdId, qty, o.price, o.cumQty, o.qty,
+        log.debug("FILL   {} {} @ {} ({}/{}){}", o.clOrdId, qty, o.price, o.cumQty, o.qty,
                 complete ? " COMPLETE" : " partial");
         send(filled(o, qty, complete), sid);
     }

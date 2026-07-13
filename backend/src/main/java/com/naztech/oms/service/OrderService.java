@@ -4,6 +4,7 @@ import com.naztech.oms.api.Dtos.*;
 import com.naztech.oms.entity.ClientAccount;
 import com.naztech.oms.entity.OmsOrder;
 import com.naztech.oms.entity.Security;
+import com.naztech.oms.perf.OrderPhaseTimings;
 import com.naztech.oms.repo.ClientAccountRepo;
 import com.naztech.oms.repo.OmsOrderRepo;
 import com.naztech.oms.repo.SecurityRepo;
@@ -38,10 +39,12 @@ public class OrderService {
     private final AuditService audit;
     private final StreamService stream;
     private final BondService bonds;
+    private final OrderPhaseTimings timings;
+    private final RefDataCache refData;
 
     public OrderService(SecurityRepo securityRepo, ClientAccountRepo accountRepo, OmsOrderRepo orderRepo,
                         RiskService riskService, MatchingGateway matching, AuditService audit, StreamService stream,
-                        BondService bonds) {
+                        BondService bonds, OrderPhaseTimings timings, RefDataCache refData) {
         this.securityRepo = securityRepo;
         this.accountRepo = accountRepo;
         this.orderRepo = orderRepo;
@@ -50,16 +53,22 @@ public class OrderService {
         this.audit = audit;
         this.stream = stream;
         this.bonds = bonds;
+        this.timings = timings;
+        this.refData = refData;
     }
 
     public record PlaceResult(OrderView order, RiskResult risk) {}
 
     @Transactional
     public PlaceResult place(OrderRequest req, String actor) {
-        Security sec = securityRepo.findById(req.securityId())
+        long t = System.nanoTime();
+        // The security is reference data (cached); the account is not — its buying power moves on
+        // every fill, so it must be read fresh or risk decisions are made on stale money.
+        Security sec = refData.security(req.securityId())
                 .orElseThrow(() -> new IllegalArgumentException("Unknown security"));
         ClientAccount acc = accountRepo.findById(req.accountId())
                 .orElseThrow(() -> new IllegalArgumentException("Unknown account"));
+        timings.record(OrderPhaseTimings.Phase.LOOKUP, t);
 
         OmsOrder o = new OmsOrder();
         o.setOrderRef("ORD-" + System.currentTimeMillis() + "-" + ORDER_SEQ.incrementAndGet());
@@ -85,7 +94,9 @@ public class OrderService {
         applyBondPricing(o, req, sec);   // bonds: derive clean price from yield (or yield from price)
 
         // ---- pre-trade risk ----
+        t = System.nanoTime();
         RiskResult risk = riskService.check(o);
+        timings.record(OrderPhaseTimings.Phase.RISK, t);
         o.setRiskScore(risk.score());
         if (!risk.pass()) {
             o.setStatus("REJECTED");
@@ -97,10 +108,13 @@ public class OrderService {
             return new PlaceResult(toView(o, sec), risk);
         }
 
+        t = System.nanoTime();
         o.setStatus("PENDING_RISK");
         orderRepo.save(o);
         audit.orderEvent(o.getId(), "RISK_PASS", "Risk score " + risk.score());
+        timings.record(OrderPhaseTimings.Phase.PERSIST, t);
 
+        t = System.nanoTime();
         String type = o.getOrderType();
         if ("STOP".equals(type) || "STOP_LIMIT".equals(type)) {
             o.setStatus("OPEN");
@@ -110,11 +124,16 @@ public class OrderService {
         } else {
             matching.submit(o);   // matches/rests + updates status
         }
+        timings.record(OrderPhaseTimings.Phase.ROUTE, t);
+
+        t = System.nanoTime();
         audit.audit(actor, "ORDER_PLACE", "ORDER", String.valueOf(o.getId()),
                 o.getSide() + " " + o.getQuantity() + " " + sec.getSymbol() + " @ " + o.getPrice());
 
         OmsOrder fresh = orderRepo.findById(o.getId()).orElse(o);
-        return new PlaceResult(toView(fresh, sec), risk);
+        PlaceResult result = new PlaceResult(toView(fresh, sec), risk);
+        timings.record(OrderPhaseTimings.Phase.FINALISE, t);
+        return result;
     }
 
     /** Amend price and/or quantity of a working (OPEN/PARTIAL) order; re-prices on the book. */

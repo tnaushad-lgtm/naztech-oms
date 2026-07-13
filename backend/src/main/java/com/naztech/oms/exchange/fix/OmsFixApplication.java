@@ -110,24 +110,37 @@ public class OmsFixApplication implements Application {
         }
     }
 
-    /** Outbound application messages (NewOrderSingle/Cancel/Replace — sent from Phase 5). */
+    /**
+     * Outbound application messages (NewOrderSingle/Cancel/Replace).
+     *
+     * <p>Logged at DEBUG, deliberately. This runs on the thread that is sending the order, and at
+     * INFO it wrote a line to the console for every message — console I/O on Windows is slow and
+     * serialised, and under load it became the single largest cost of placing an order, queueing
+     * every thread behind it. The message itself is still journalled to {@code fixlog/} by the FIX
+     * engine (asynchronously), so nothing is lost from the audit trail: that file, not this line, is
+     * the record of what we sent the exchange.
+     */
     @Override
     public void toApp(Message message, SessionID sessionId) {
         try {
             state.setLastOutMsgType(message.getHeader().getString(TAG_MSG_TYPE));
-            FIX_OUT.info("APP  {} :: {}", sessionId, message);
+            if (FIX_OUT.isDebugEnabled()) {
+                FIX_OUT.debug("APP  {} :: {}", sessionId, message);
+            }
         } catch (Exception e) {
             log.warn("toApp handling error: {}", e.toString());
         }
     }
 
-    /** Inbound application messages (ExecutionReport/OrderCancelReject — routed to OMS in Phase 5). */
+    /** Inbound application messages (ExecutionReport/OrderCancelReject). DEBUG — see {@link #toApp}. */
     @Override
     public void fromApp(Message message, SessionID sessionId) {
         try {
             String msgType = message.getHeader().getString(TAG_MSG_TYPE);
             state.setLastInMsgType(msgType);
-            FIX_IN.info("APP  {} :: {}", sessionId, message);
+            if (FIX_IN.isDebugEnabled()) {
+                FIX_IN.debug("APP  {} :: {}", sessionId, message);
+            }
             switch (msgType) {
                 case "8" -> execution.onExecutionReport(message);   // ExecutionReport → OMS lifecycle
                 case "9" -> execution.onCancelReject(message);      // OrderCancelReject
