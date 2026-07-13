@@ -9,6 +9,7 @@ import com.naztech.oms.entity.Security;
 import com.naztech.oms.entity.Trade;
 import com.naztech.oms.exchange.OrderFillApplier;
 import com.naztech.oms.exchange.config.SimulatorModeCondition;
+import com.naztech.oms.perf.ExecutionStats;
 import com.naztech.oms.repo.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +52,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     private final AuditService audit;
     private final OrderFillApplier fills;
     private final MarketSessionService session;
+    private final ExecutionStats stats;
 
     @Value("${app.matching.autosim:true}")
     private boolean autosim;
@@ -70,7 +72,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     public SimulatedMatchingEngine(OmsOrderRepo orderRepo, TradeRepo tradeRepo, SecurityRepo securityRepo,
                                    MarketDataRepo marketRepo, PortfolioService portfolio,
                                    MarketDataService marketData, StreamService stream, AuditService audit,
-                                   OrderFillApplier fills, MarketSessionService session) {
+                                   OrderFillApplier fills, MarketSessionService session, ExecutionStats stats) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
@@ -81,6 +83,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         this.audit = audit;
         this.fills = fills;
         this.session = session;
+        this.stats = stats;
     }
 
     // -------------------------------------------------------------- book model
@@ -227,6 +230,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
             dbOrder.setStatus(st);
             dbOrder.setUpdatedAt(LocalDateTime.now());
             orderRepo.save(dbOrder);
+            stats.execution(st);      // the simulator's equivalent of an inbound ExecutionReport
             audit.orderEvent(dbOrder.getId(), st, "Order " + st.toLowerCase()
                     + " (filled " + (dbOrder.getFilledQty() == null ? 0 : dbOrder.getFilledQty())
                     + "/" + dbOrder.getQuantity() + ")");
@@ -278,6 +282,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
                 po.setStatus(st);
                 po.setUpdatedAt(LocalDateTime.now());
                 orderRepo.save(po);
+                stats.execution(st);
                 audit.orderEvent(po.getId(), "FILL", "Resting fill " + qty + " @ " + px.toPlainString());
                 publishOrder(po);
             });

@@ -25,6 +25,27 @@ public class ItchProperties {
     /** Multicast group (moldudp64). */
     private String group;
 
+    /**
+     * The trading session's name, as the exchange stamps it on every packet. A packet from another
+     * session is not a gap in ours — dropping it is correct, and applying it is not.
+     * Blank accepts whatever session the feed is publishing.
+     */
+    private String session = "";
+
+    /** SoupBinTCP credentials. Put the password in {@code secrets.properties}, never here. */
+    private String username = "";
+    private String password = "";
+
+    /**
+     * MoldUDP64 rewind (retransmission) server. Without it a gap is detected, logged and eventually
+     * given up on — which is honest, but it is not recovery.
+     */
+    private String rewindHost;
+    private int rewindPort = 0;
+
+    /** Which NIC to join the multicast group on. Blank lets the OS choose — fine until it isn't. */
+    private String networkInterface;
+
     private boolean replay = false;
     private String replayFile;
 

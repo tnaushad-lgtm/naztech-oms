@@ -58,7 +58,14 @@ public class AiController {
         try {
             var r = advisor.advise(req.message(), req.accountId(), req.action(),
                     req.imageBase64(), req.imageMime(), req.history(), req.lang());
-            return ResponseEntity.ok(Map.of("answer", r.answer(), "source", r.source(), "ai", r.ai()));
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("answer", r.answer());
+        out.put("source", r.source());
+        out.put("ai", r.ai());
+        if (r.route() != null) {
+            out.put("route", r.route());   // "it is on this screen" — the UI renders it as a link
+        }
+        return ResponseEntity.ok(out);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -75,6 +82,18 @@ public class AiController {
                               @RequestParam(defaultValue = "35") double min,
                               @RequestParam(defaultValue = "12") int limit) {
         return search.search(q, min, limit);
+    }
+
+    /**
+     * "Where do I find market depth?" — semantic search over the OMS's own screens, so a dealer can
+     * ask for a feature in their own words instead of hunting the sidebar. Same on-prem model as the
+     * security search: no key required, nothing leaves the exchange.
+     */
+    @GetMapping("/help")
+    public List<com.naztech.oms.api.Dtos.NavHit> help(@RequestParam String q,
+                                                      @RequestParam(defaultValue = "28") double min,
+                                                      @RequestParam(defaultValue = "5") int limit) {
+        return search.findFeature(q, min, limit);
     }
 
     /** Parse a natural-language / spoken instruction into structured orders (parsed only — the UI confirms). */

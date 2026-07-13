@@ -33,6 +33,13 @@ public class SecuritySearchService {
     private final SecurityRepo securityRepo;
     private final EmbeddingModel model = new AllMiniLmL6V2EmbeddingModel();
     private final Map<Long, float[]> vectors = new ConcurrentHashMap<>();
+
+    /**
+     * The OMS's own screens, embedded with the same model — so "where do I find market depth?" is
+     * answered by the same semantic search that finds a security. Sharing the model matters: each
+     * AllMiniLmL6V2EmbeddingModel loads its own ONNX weights into the JVM, and one copy is enough.
+     */
+    private final Map<String, float[]> featureVectors = new ConcurrentHashMap<>();
     private final AtomicBoolean ready = new AtomicBoolean(false);
 
     public SecuritySearchService(SecurityRepo securityRepo) {
@@ -62,6 +69,7 @@ public class SecuritySearchService {
                 List<Embedding> embs = model.embedAll(segs).content();
                 for (int i = 0; i < embs.size(); i++) vectors.put(ids.get(i), embs.get(i).vector());
             }
+            buildFeatureIndex();
             ready.set(true);
             log.info("Security semantic index ready: {} vectors in {} ms",
                     vectors.size(), System.currentTimeMillis() - start);
@@ -71,6 +79,44 @@ public class SecuritySearchService {
     }
 
     public boolean isReady() { return ready.get(); }
+
+    private void buildFeatureIndex() {
+        for (FeatureCatalog.Feature f : FeatureCatalog.FEATURES) {
+            // Keyed by title, not route: several features live on one screen (the blotter, the
+            // watchlist and the order ticket are all on the Trader Terminal), and each has to be
+            // findable in its own right.
+            featureVectors.put(f.title(), model.embed(f.searchText()).content().vector());
+        }
+        log.info("Feature index ready: {} screens are now findable by asking for them",
+                featureVectors.size());
+    }
+
+    /**
+     * "Where do I find X?" — matches a question against the OMS's own screens.
+     *
+     * <p>Runs on the in-process model, so it works with no Gemini key and nothing leaves the exchange.
+     */
+    public List<com.naztech.oms.api.Dtos.NavHit> findFeature(String question, double minPercent, int limit) {
+        if (question == null || question.isBlank() || featureVectors.isEmpty()) {
+            return List.of();
+        }
+        float[] q = model.embed(question.trim()).content().vector();
+        List<com.naztech.oms.api.Dtos.NavHit> hits = new ArrayList<>();
+        for (FeatureCatalog.Feature f : FeatureCatalog.FEATURES) {
+            float[] v = featureVectors.get(f.title());
+            if (v == null) {
+                continue;
+            }
+            double pct = Math.max(0.0, cosine(q, v)) * 100.0;
+            if (pct < minPercent) {
+                continue;
+            }
+            hits.add(new com.naztech.oms.api.Dtos.NavHit(f.route(), f.title(), f.what(), f.how(),
+                    Math.round(pct * 10.0) / 10.0));
+        }
+        hits.sort(java.util.Comparator.comparingDouble(com.naztech.oms.api.Dtos.NavHit::matchPct).reversed());
+        return hits.size() > limit ? hits.subList(0, limit) : hits;
+    }
     public int indexed() { return vectors.size(); }
 
     /** Returns securities ranked by semantic similarity to {@code query}. */

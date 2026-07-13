@@ -6,7 +6,7 @@ import { STREAM } from "./api";
 type Handler = (type: string, data: any) => void;
 // The browser only listens for names in this list — an event the backend publishes but that is
 // missing here is silently dropped.
-const EVENTS = ["hello", "trade", "order", "market", "indices", "alert", "session"];
+const EVENTS = ["hello", "trade", "order", "market", "indices", "alert", "session", "depth"];
 
 /** Subscribes to the OMS SSE stream; calls `onEvent(type, data)` and tracks connectivity. */
 export function useLive(onEvent: Handler) {

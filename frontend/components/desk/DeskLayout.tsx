@@ -72,22 +72,23 @@ const factory = (node: TabNode) => {
   }
 };
 
-const KEY = () => `oms_desk_${getSession()?.username || "guest"}`;
+/** Namespaced so the Trader Terminal and the Trading Desk each remember their own arrangement. */
+const KEY = (ns: string) => `oms_${ns}_${getSession()?.username || "guest"}`;
 
-export function DeskLayout() {
+export function DeskLayout({ ns = "desk" }: { ns?: string }) {
   const [model, setModel] = useState<Model | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const layoutRef = useRef<Layout>(null);
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(KEY());
+      const saved = localStorage.getItem(KEY(ns));
       setModel(Model.fromJson(saved ? JSON.parse(saved) : DEFAULT_JSON));
     } catch { setModel(Model.fromJson(DEFAULT_JSON)); }
-  }, []);
+  }, [ns]);
 
-  const onChange = (m: Model) => { try { localStorage.setItem(KEY(), JSON.stringify(m.toJson())); } catch {} };
-  const reset = () => { try { localStorage.removeItem(KEY()); } catch {} setModel(Model.fromJson(DEFAULT_JSON)); };
+  const onChange = (m: Model) => { try { localStorage.setItem(KEY(ns), JSON.stringify(m.toJson())); } catch {} };
+  const reset = () => { try { localStorage.removeItem(KEY(ns)); } catch {} setModel(Model.fromJson(DEFAULT_JSON)); };
   const addPanel = (p: { component: string; name: string }) => {
     layoutRef.current?.addTabToActiveTabSet({ type: "tab", name: p.name, component: p.component });
     setAddOpen(false);

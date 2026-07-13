@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { post, API } from "@/lib/api";
 import { getSession } from "@/lib/session";
 
-type Msg = { role: "user" | "assistant"; text: string; source?: string; ai?: boolean };
+type Msg = { role: "user" | "assistant"; text: string; source?: string; ai?: boolean; route?: string };
 
 const SUGGESTIONS = [
+  "Where do I find market depth?",
+  "How do I place a buy order?",
   "Is GP in a good position today?",
   "Which sector is doing well?",
   "Am I in profit or loss?",
@@ -38,6 +41,7 @@ function splitChunks(text: string, firstMax: number, restMax: number): string[] 
 }
 
 export function AiAdvisor() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -130,7 +134,7 @@ export function AiAdvisor() {
         imageBase64: img?.b64, imageMime: img?.mime, history,
       });
       const ans = r.answer || r.error || "Sorry, I couldn't get an answer.";
-      setMsgs((m) => [...m, { role: "assistant", text: ans, source: r.source, ai: r.ai }]);
+      setMsgs((m) => [...m, { role: "assistant", text: ans, source: r.source, ai: r.ai, route: r.route }]);
     } catch (e: any) {
       setMsgs((m) => [...m, { role: "assistant", text: "Error: " + (e.message || "request failed") }]);
     } finally { setBusy(false); }
@@ -210,7 +214,15 @@ export function AiAdvisor() {
                                         : "border border-line/[0.08] bg-surface/[0.05] text-ink-200"}`}>
                       {m.text}
                       {m.role === "assistant" && (
-                        <div className="mt-1.5 flex items-center gap-2">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          {/* When the answer is "it is on this screen", take them there — an answer a
+                              user still has to go hunting for is only half an answer. */}
+                          {m.route && (
+                            <button onClick={() => { setOpen(false); router.push(m.route!); }}
+                              className="flex items-center gap-1 rounded-md bg-gradient-to-r from-aurora-violet to-aurora-indigo px-2 py-0.5 text-[10px] font-semibold text-white hover:brightness-110">
+                              Take me there →
+                            </button>
+                          )}
                           <button onClick={() => playAudio(m.text)}
                             className="flex items-center gap-1 rounded-md bg-surface/[0.06] px-1.5 py-0.5 text-[10px] text-ink-400 hover:text-aurora-cyan">
                             🔊 Listen

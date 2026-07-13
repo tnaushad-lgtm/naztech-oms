@@ -175,20 +175,57 @@ public class ItchGateway implements MarketDataGateway {
         }
     }
 
-    /** Select the message source from config: replay a capture if requested, else simulate; tee to a
-     *  recorder when {@code itch.record=true}. Adding a real SoupBinTCP/MoldUDP64 source is a new branch
-     *  here only — nothing downstream changes. */
+    /**
+     * Select the message source from config. A replay capture wins if one is configured; otherwise the
+     * transport decides — a real SoupBinTCP session, a real MoldUDP64 multicast feed, or the simulator.
+     * Tee to a recorder when {@code itch.record=true}.
+     *
+     * <p>This method is the <em>only</em> thing that knows where ITCH bytes come from. Everything above
+     * it — the books, market data, depth, the terminal — is identical whether the feed is DSE's or a
+     * simulation, which is the point of the {@link ItchSource} seam and the reason switching to the
+     * real exchange is a config change rather than a project.
+     *
+     * <p>A live transport that cannot connect throws, and the caller falls back to the simulator with a
+     * loud log line. It must never fall back silently: a feed producing nothing looks exactly like a
+     * market with no trades in it, and those are very different situations.
+     */
     private ItchSource buildSource(List<ItchSimulator.Instrument> instruments) throws IOException {
         ItchSource base;
         if (props.isReplay() && props.getReplayFile() != null && !props.getReplayFile().isBlank()) {
             base = new FileReplaySource(Path.of(props.getReplayFile()), props.getBurst());
         } else {
-            base = new SimulatorSource(instruments, props.getSeed(), props.getBurst());
+            base = switch (String.valueOf(props.getTransport()).toLowerCase()) {
+                case "soupbintcp" -> new SoupBinTcpSource(props.getHost(), props.getPort(),
+                        props.getUsername(), props.getPassword(), props.getSession());
+                case "moldudp64" -> new MoldUdp64Source(props.getGroup(), props.getPort(),
+                        props.getSession(), props.getRewindHost(), props.getRewindPort(),
+                        props.getNetworkInterface());
+                default -> new SimulatorSource(instruments, props.getSeed(), props.getBurst());
+            };
         }
         if (props.isRecord() && props.getRecordFile() != null && !props.getRecordFile().isBlank()) {
             base = new RecordingSource(base, new ItchSessionWriter(Path.of(props.getRecordFile())));
         }
         return base;
+    }
+
+    /**
+     * How the live feed is doing: gaps seen, gaps recovered, messages given up on.
+     *
+     * <p>{@code lost > 0} is the number that matters. It does not mean "the feed hiccupped" — gaps
+     * happen and are recovered — it means we asked for messages and never got them, so every book built
+     * since is suspect and wants a fresh snapshot. The simulator and a replay cannot lose anything, and
+     * report nothing.
+     */
+    public ItchSequencer.Health feedHealth() {
+        ItchSource s = source;
+        if (s instanceof SoupBinTcpSource soup) {
+            return soup.health();
+        }
+        if (s instanceof MoldUdp64Source mold) {
+            return mold.health();
+        }
+        return null;
     }
 
     @EventListener(ContextClosedEvent.class)

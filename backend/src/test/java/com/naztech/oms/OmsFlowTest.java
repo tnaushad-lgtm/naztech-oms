@@ -178,6 +178,53 @@ class OmsFlowTest {
     }
 
     @Test
+    void suspended_client_account_cannot_trade() {
+        ClientAccount acc = client1();
+        acc.setStatus("SUSPENDED");
+        accountRepo.save(acc);
+        try {
+            OrderRequest req = new OrderRequest(acc.getId(), gp().getId(), "BUY", "MARKET",
+                    "NORMAL", "DAY", null, null, null, 100L, dealerId());
+            OrderService.PlaceResult res = orderService.place(req, "dealer1");
+
+            // Until this check existed, the status column was decoration: a suspended client's orders
+            // were validated, routed and filled exactly like an active one's.
+            assertThat(res.risk().pass()).isFalse();
+            assertThat(res.order().status()).isEqualTo("REJECTED");
+            assertThat(res.order().rejectReason()).containsIgnoringCase("SUSPENDED");
+        } finally {
+            acc.setStatus("ACTIVE");
+            accountRepo.save(acc);
+        }
+    }
+
+    @Test
+    void block_market_order_below_the_floor_is_rejected() {
+        // 100 shares of GP is not a block trade in any market on earth; DSE's floor is Tk 5 lakh.
+        OrderRequest small = new OrderRequest(client1().getId(), gp().getId(), "BUY", "LIMIT",
+                "BLOCK", "DAY", null, java.math.BigDecimal.valueOf(300), null, 100L, dealerId());
+        OrderService.PlaceResult res = orderService.place(small, "dealer1");
+        assertThat(res.risk().pass()).isFalse();
+        assertThat(res.order().rejectReason()).containsIgnoringCase("block-market");
+
+        // 5,000 at 300 = 1,500,000: over the floor, so the block market is the right place for it.
+        OrderRequest real = new OrderRequest(client1().getId(), gp().getId(), "BUY", "LIMIT",
+                "BLOCK", "DAY", null, java.math.BigDecimal.valueOf(300), null, 5_000L, dealerId());
+        OrderService.PlaceResult ok = orderService.place(real, "dealer1");
+        assertThat(ok.risk().pass()).isTrue();
+        orderService.cancel(ok.order().id(), "dealer1");
+    }
+
+    @Test
+    void an_unknown_trade_window_is_rejected() {
+        OrderRequest req = new OrderRequest(client1().getId(), gp().getId(), "BUY", "LIMIT",
+                "AFTER_HOURS", "DAY", null, java.math.BigDecimal.valueOf(300), null, 100L, dealerId());
+        OrderService.PlaceResult res = orderService.place(req, "dealer1");
+        assertThat(res.risk().pass()).isFalse();
+        assertThat(res.order().rejectReason()).containsIgnoringCase("Unknown trade window");
+    }
+
+    @Test
     void closed_market_blocks_orders() {
         marketSession.close("DSE", "test");
         try {

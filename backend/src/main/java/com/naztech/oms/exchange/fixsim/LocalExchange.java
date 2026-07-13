@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -92,6 +93,17 @@ public class LocalExchange implements Application {
     private final AtomicLong orderSeq = new AtomicLong(1);
 
     private final Map<String, Resting> book = new ConcurrentHashMap<>();
+
+    /**
+     * What the venue believes each instrument is worth — pushed by the OMS from its live market data.
+     *
+     * <p>Without this the exchange priced orders off a hardcoded table of seeded LTPs, which drifts
+     * away from the prices the trader is actually looking at as the feed moves. The two then disagree
+     * about what is marketable: a bid that looks aggressive on the terminal rests untouched at the
+     * venue, for no reason the dealer can see. An exchange must trade against the market that exists,
+     * not the one it was born with.
+     */
+    private final Map<String, BigDecimal> livePrices = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "local-exchange-matcher");
@@ -103,10 +115,147 @@ public class LocalExchange implements Application {
     private final long partialFillDelayMs;
     private final long finalFillDelayMs;
 
+    /**
+     * The venue's own trading phase — because the venue decides what trades, not the client.
+     *
+     * <p>The OMS pushes this on every session change (see {@code LocalExchangeMain}'s control
+     * endpoint). Without it the exchange filled orders in pre-open, which no real exchange does: it
+     * accepts them, queues them, and crosses the book at the opening bell.
+     */
+    private volatile Phase phase = Phase.OPEN;
+
+    public enum Phase { CLOSED, PRE_OPEN, OPEN, HALTED }
+
+    /**
+     * How the venue decides each marketable order's fate — the "outcome mix" a performance run needs.
+     *
+     * <p>A load test where every order is accepted and fully filled measures one path through the OMS
+     * and calls it the system. Real venues reject, and real orders sit half-filled; those paths write
+     * different rows, take different branches in {@code ExecutionService}, and cost different money.
+     * So the mix is a dial: of every 100 marketable orders, {@code rejectPct} are refused outright,
+     * {@code partialPct} fill {@code partialFillPct}% and then stop (leaving the order PARTIAL), and
+     * the rest fill completely.
+     *
+     * <p>Defaults are all-accept / all-fill, so an exchange nobody has configured behaves exactly as
+     * it did before this existed.
+     *
+     * @param rejectPct      0–100: share of orders the venue rejects outright
+     * @param partialPct     0–100: share of orders that fill partly and then stop
+     * @param partialFillPct 1–99: how much of such an order fills (the minutes ask for 25 / 50 / 75)
+     */
+    public record OutcomeMix(int rejectPct, int partialPct, int partialFillPct) {
+
+        public static final OutcomeMix ALL_FILL = new OutcomeMix(0, 0, 50);
+
+        public OutcomeMix {
+            rejectPct = clamp(rejectPct, 0, 100);
+            partialPct = clamp(partialPct, 0, 100 - rejectPct);   // the two shares cannot exceed the whole
+            partialFillPct = clamp(partialFillPct, 1, 99);        // 0 or 100 would not be a partial fill
+        }
+
+        private static int clamp(int v, int lo, int hi) {
+            return Math.max(lo, Math.min(hi, v));
+        }
+    }
+
+    private volatile OutcomeMix mix = OutcomeMix.ALL_FILL;
+
     public LocalExchange(long ackDelayMs, long partialFillDelayMs, long finalFillDelayMs) {
         this.ackDelayMs = ackDelayMs;
         this.partialFillDelayMs = partialFillDelayMs;
         this.finalFillDelayMs = finalFillDelayMs;
+    }
+
+    public Phase phase() {
+        return phase;
+    }
+
+    public OutcomeMix outcomeMix() {
+        return mix;
+    }
+
+    /** Set by the OMS before a performance run (see LocalExchangeMain's /config endpoint). */
+    public void setOutcomeMix(OutcomeMix next) {
+        this.mix = next == null ? OutcomeMix.ALL_FILL : next;
+        log.info("OUTCOME MIX — reject {}%, partial {}% (filling {}%), full {}%",
+                mix.rejectPct(), mix.partialPct(), mix.partialFillPct(),
+                100 - mix.rejectPct() - mix.partialPct());
+    }
+
+    /**
+     * The OMS pushes its live prices here (see LocalExchangeMain's /prices endpoint), and every push
+     * is a chance for a resting order to trade: a bid left below the market fills the moment the
+     * market falls to it. That sweep is what makes this a book rather than a queue.
+     */
+    public void setPrices(Map<String, BigDecimal> prices) {
+        livePrices.putAll(prices);
+        if (phase == Phase.OPEN) {
+            sweep();
+        }
+    }
+
+    /** Cross every resting order the market has now reached. The opening bell is just this, once. */
+    private void sweep() {
+        SessionID sid = activeSession;
+        if (sid == null) {
+            return;
+        }
+        for (Resting o : book.values()) {
+            if (o.done || o.leaves() <= 0 || !isMarketable(o)) {
+                continue;
+            }
+            if (!o.sweeping.compareAndSet(false, true)) {
+                continue;                       // fills already scheduled; a second push must not double them
+            }
+            long clip = o.qty > 1 ? Math.max(1, o.leaves() / 2) : o.leaves();
+            log.debug("CROSS  {} — the market reached {} @ {}", o.clOrdId, o.symbol, o.price);
+            schedule(partialFillDelayMs, () -> fill(o, clip, sid));
+            schedule(finalFillDelayMs, () -> fill(o, o.leaves(), sid));
+        }
+    }
+
+    public int pricedInstruments() {
+        return livePrices.size();
+    }
+
+    /** The live price if the OMS has told us one; otherwise the seeded reference. */
+    private BigDecimal reference(String symbol) {
+        BigDecimal live = symbol == null ? null : livePrices.get(symbol.toUpperCase());
+        return live != null && live.signum() > 0 ? live : ReferencePrices.of(symbol);
+    }
+
+    /**
+     * Would this order trade right now? Asked afresh every time, because it is a question about the
+     * market as it stands — a bid below the market rests until the market falls to it, and then it
+     * trades. Answering it once at order entry and remembering the answer is how a resting order ends
+     * up sitting there for ever while the price walks straight through it.
+     */
+    private boolean isMarketable(Resting o) {
+        if (o.marketOrder) {
+            return true;
+        }
+        BigDecimal ref = reference(o.symbol);
+        return o.side == Side.BUY ? o.price.compareTo(ref) >= 0 : o.price.compareTo(ref) <= 0;
+    }
+
+    /**
+     * Move the venue to a new phase. Crossing into OPEN runs the opening auction: every order that
+     * built up in pre-open and is now marketable trades at once, which is what the opening bell
+     * actually is.
+     */
+    public void setPhase(Phase next, SessionID sid) {
+        Phase from = phase;
+        phase = next;
+        log.info("EXCHANGE {} -> {}", from, next);
+        if (next == Phase.OPEN && from == Phase.PRE_OPEN && sid != null) {
+            uncross(sid);
+        }
+    }
+
+    /** The opening bell: cross everything the pre-open book has been waiting to trade. */
+    private void uncross(SessionID sid) {
+        log.info("OPENING BELL — crossing the pre-open book");
+        sweep();
     }
 
     /** A working order the exchange is holding on behalf of the OMS. */
@@ -117,17 +266,23 @@ public class LocalExchange implements Application {
         final char side;
         final long qty;
         final BigDecimal price;
+        /** A market order always trades; a limit order only when the market reaches its price. */
+        final boolean marketOrder;
         long cumQty;
         BigDecimal notional = BigDecimal.ZERO;
         volatile boolean done;
+        /** Fills already scheduled for this order — so a second price push cannot double-fill it. */
+        final java.util.concurrent.atomic.AtomicBoolean sweeping = new java.util.concurrent.atomic.AtomicBoolean();
 
-        Resting(String clOrdId, String exchangeOrderId, String symbol, char side, long qty, BigDecimal price) {
+        Resting(String clOrdId, String exchangeOrderId, String symbol, char side, long qty, BigDecimal price,
+                boolean marketOrder) {
             this.clOrdId = clOrdId;
             this.exchangeOrderId = exchangeOrderId;
             this.symbol = symbol;
             this.side = side;
             this.qty = qty;
             this.price = price;
+            this.marketOrder = marketOrder;
         }
 
         long leaves() {
@@ -148,9 +303,18 @@ public class LocalExchange implements Application {
         log.info("Session created: {}", sessionId);
     }
 
+    /** The OMS's session, remembered so the control endpoint can report fills after a phase change. */
+    private volatile SessionID activeSession;
+
     @Override
     public void onLogon(SessionID sessionId) {
-        log.info("LOGON  <-- {} is connected. Orders will be accepted and filled.", sessionId.getTargetCompID());
+        activeSession = sessionId;
+        log.info("LOGON  <-- {} is connected. Market is {}.", sessionId.getTargetCompID(), phase);
+    }
+
+    /** Used by the control endpoint: the session to send the opening bell's fills on. */
+    public SessionID activeSession() {
+        return activeSession;
     }
 
     @Override
@@ -201,21 +365,49 @@ public class LocalExchange implements Application {
         // MARKET orders carry no Price(44); bond yield-basis orders carry Yield(236) instead.
         BigDecimal price = (ordType == OrdType.LIMIT && m.isSetField(Price.FIELD))
                 ? BigDecimal.valueOf(m.getDouble(Price.FIELD)).setScale(4, RoundingMode.HALF_UP)
-                : ReferencePrices.of(symbol);
+                : reference(symbol);
 
-        Resting order = new Resting(clOrdId, "EX-" + orderSeq.getAndIncrement(), symbol, side, qty, price);
+        // The venue's session decides what may happen to this order. A closed or halted market takes
+        // no orders at all; pre-open takes them and queues them; only a trading market crosses them.
+        // The venue enforces this, not the client — which is the whole reason a real exchange cannot
+        // be talked into trading before the bell.
+        Phase p = phase;
+        if (p == Phase.CLOSED || p == Phase.HALTED) {
+            log.info("REJECT {} — market is {}", clOrdId, p);
+            send(rejected(clOrdId, symbol, side, qty,
+                    p == Phase.CLOSED ? "Market is closed" : "Market is halted"), sid);
+            return;
+        }
+
+        // The configured share of orders the venue simply refuses. Rolled before the order is booked:
+        // a rejected order never existed as far as the exchange is concerned, so it must not appear on
+        // the book, and it must not be cancellable.
+        OutcomeMix m2 = mix;
+        int roll = m2.rejectPct() + m2.partialPct() > 0 ? ThreadLocalRandom.current().nextInt(100) : 100;
+        if (roll < m2.rejectPct()) {
+            log.debug("REJECT {} — outcome mix ({}% rejected)", clOrdId, m2.rejectPct());
+            send(rejected(clOrdId, symbol, side, qty, "Rejected by exchange"), sid);
+            return;
+        }
+
+        // Would this order trade if the market were open? A real venue only fills a limit order that
+        // crosses the market — a BUY at 23.90 when the stock is 47.80 simply rests on the book until
+        // the market comes to it.
+        Resting order = new Resting(clOrdId, "EX-" + orderSeq.getAndIncrement(), symbol, side, qty, price,
+                ordType == OrdType.MARKET);
         book.put(clOrdId, order);
+
+        BigDecimal reference = reference(symbol);
+        boolean marketable = isMarketable(order);
 
         schedule(ackDelayMs, () -> send(ack(order), sid));
 
-        // Would this order actually trade? A real venue only fills a limit order that crosses the
-        // market — a BUY at 23.90 when the stock is 47.80 simply rests on the book until the market
-        // comes to it. Filling everything regardless (as this did originally) is not just unrealistic:
-        // it means a "resting" order still books a trade, moves a position and marks the tape, which
-        // quietly triples the write load of every order placed.
-        BigDecimal reference = ReferencePrices.of(symbol);
-        boolean marketable = ordType == OrdType.MARKET
-                || (side == Side.BUY ? price.compareTo(reference) >= 0 : price.compareTo(reference) <= 0);
+        if (p == Phase.PRE_OPEN) {
+            // The book builds; nothing crosses. It trades at the opening bell — see uncross().
+            log.debug("QUEUE  {} {} {} x {} @ {} — pre-open, waiting for the bell",
+                    clOrdId, sideName(side), qty, symbol, price);
+            return;
+        }
 
         // Per-order logging is DEBUG: this runs on the session's receive thread, and writing a line
         // to a Windows console per order is slow enough to throttle the whole venue — at which point
@@ -227,6 +419,20 @@ public class LocalExchange implements Application {
         }
 
         log.debug("NEW    {} {} {} x {} @ {} (tif={})", clOrdId, sideName(side), qty, symbol, price, tif);
+
+        // The configured share that fills part-way and then stops. The order stays PARTIAL and working
+        // — it is not cancelled and not completed — which is the state a real book leaves an order in
+        // when the liquidity at its price runs out, and the state the OMS must be able to carry.
+        if (roll < m2.rejectPct() + m2.partialPct()) {
+            long clip = Math.max(1, qty * m2.partialFillPct() / 100);
+            if (clip < qty) {
+                log.debug("PARTIAL {} — outcome mix: filling {} of {} and stopping", clOrdId, clip, qty);
+                schedule(ackDelayMs + partialFillDelayMs, () -> fill(order, clip, sid));
+                order.sweeping.set(true);      // and no later price push may finish it off
+                return;
+            }
+            // a 1-share order cannot be partially filled; fall through and fill it
+        }
 
         boolean immediate = tif == TimeInForce.IMMEDIATE_OR_CANCEL || tif == TimeInForce.FILL_OR_KILL;
         if (immediate || qty <= 1) {
@@ -338,6 +544,25 @@ public class LocalExchange implements Application {
         ExecutionReport er = report(o, ExecType.REPLACED, OrdStatus.NEW);
         er.set(new ClOrdID(newClOrdId));
         er.set(new OrigClOrdID(o.clOrdId));
+        return er;
+    }
+
+    /** The venue refusing an order outright. OrdStatus 8 is what the OMS maps to REJECTED. */
+    private ExecutionReport rejected(String clOrdId, String symbol, char side, long qty, String why) {
+        ExecutionReport er = new ExecutionReport();
+        er.set(new OrderID("NONE"));
+        er.set(new ExecID(nextExecId()));
+        er.set(new ExecType(ExecType.REJECTED));
+        er.set(new OrdStatus(OrdStatus.REJECTED));
+        er.set(new ClOrdID(clOrdId));
+        er.set(new Side(side));
+        er.set(new Symbol(symbol));
+        er.set(new OrderQty(qty));
+        er.set(new LeavesQty(0));
+        er.set(new CumQty(0));
+        er.set(new AvgPx(0));
+        er.set(new Text(why));                     // the OMS reads Text on a reject as the reason
+        er.set(new TransactTime(LocalDateTime.now(ZoneOffset.UTC)));
         return er;
     }
 

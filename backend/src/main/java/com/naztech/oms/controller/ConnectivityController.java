@@ -83,6 +83,24 @@ public class ConnectivityController {
         itchMap.put("transport", itch.getTransport());
         itchMap.put("depthSource", marketDataGateway.source());
 
+        // Feed health, but only a live transport has any: the simulator and a replay cannot lose a
+        // message, so reporting "0 gaps" for them would be a claim about nothing.
+        if (marketDataGateway instanceof com.naztech.oms.exchange.itch.ItchGateway gw) {
+            var health = gw.feedHealth();
+            if (health != null) {
+                Map<String, Object> feed = new LinkedHashMap<>();
+                feed.put("expectedSeq", health.expected());
+                feed.put("delivered", health.delivered());
+                feed.put("duplicates", health.duplicates());
+                feed.put("gapsDetected", health.gapsDetected());
+                feed.put("gapsRecovered", health.gapsRecovered());
+                feed.put("lost", health.lost());
+                feed.put("buffered", health.buffered());
+                feed.put("healthy", health.healthy());
+                itchMap.put("feed", feed);
+            }
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("mode", exchange.getMode());
         out.put("fix", fixMap);

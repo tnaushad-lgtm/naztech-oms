@@ -132,6 +132,79 @@ class LocalExchangeTest {
     }
 
     @Test
+    @DisplayName("in PRE_OPEN a marketable order is queued, NOT filled — it trades at the opening bell")
+    void preOpenQueuesTheOrderAndTheBellCrossesIt() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+        exchange.setPhase(LocalExchange.Phase.PRE_OPEN, null);
+
+        // A BUY at 112.50 when BEXIMCO is 102.40 is marketable: in continuous trading it fills at once.
+        OmsOrder order = order("ORD-1752400003333-444", "BUY", 1000L, new BigDecimal("112.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BEXIMCO")), oms.sessionId);
+
+        Message ack = oms.next();
+        assertThat(ack.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.NEW);      // accepted, working
+        assertThat(ack.getDouble(CumQty.FIELD)).isZero();
+
+        assertThat(oms.inbound.poll(2, TimeUnit.SECONDS))
+                .as("nothing may trade before the opening bell — this is the bug that shipped")
+                .isNull();
+
+        // The bell: the pre-open book crosses. The venue sends on ITS session (the reverse of the
+        // OMS's), which is exactly what the control endpoint passes it.
+        exchange.setPhase(LocalExchange.Phase.OPEN, exchange.activeSession());
+
+        Message partial = oms.next();
+        assertThat(partial.getChar(ExecType.FIELD)).isEqualTo(ExecType.TRADE);
+        assertThat(partial.getDouble(LastQty.FIELD)).isEqualTo(500.0);
+        Message complete = oms.next();
+        assertThat(complete.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.FILLED);
+        assertThat(complete.getDouble(CumQty.FIELD)).isEqualTo(1000.0);
+    }
+
+    @Test
+    @DisplayName("a closed or halted market refuses the order outright — the venue enforces it, not us")
+    void closedMarketRejectsTheOrderAtTheVenue() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+        exchange.setPhase(LocalExchange.Phase.CLOSED, null);
+
+        OmsOrder order = order("ORD-1752400004444-555", "BUY", 100L, new BigDecimal("112.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BEXIMCO")), oms.sessionId);
+
+        Message rej = oms.next();
+        assertThat(rej.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.REJECTED);   // -> OMS status REJECTED
+        assertThat(rej.getString(ClOrdID.FIELD)).isEqualTo(order.getOrderRef());
+        assertThat(rej.getString(quickfix.field.Text.FIELD)).contains("closed");
+    }
+
+    @Test
+    @DisplayName("a resting bid fills when the market falls to it — the venue prices off the OMS's live market")
+    void aRestingBidFillsWhenTheMarketReachesIt() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+
+        // The OMS says LHBL is 68.90 (as the seeded table does). A bid at 65.50 is below the market,
+        // so it rests — this is the order that sat there in the live system.
+        exchange.setPrices(java.util.Map.of("LHBL", new BigDecimal("68.90")));
+
+        OmsOrder order = order("ORD-1752400005555-666", "BUY", 108L, new BigDecimal("65.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("LHBL")), oms.sessionId);
+
+        assertThat(oms.next().getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.NEW);   // working
+        assertThat(oms.inbound.poll(1500, TimeUnit.MILLISECONDS))
+                .as("a bid below the market must not trade")
+                .isNull();
+
+        // The market falls to 65.20 — now the bid is marketable, and a real book fills it.
+        exchange.setPrices(java.util.Map.of("LHBL", new BigDecimal("65.20")));
+
+        Message fill = oms.next();
+        assertThat(fill.getChar(ExecType.FIELD)).isEqualTo(ExecType.TRADE);
+        assertThat(fill.getDouble(LastPx.FIELD)).isEqualTo(65.5);   // filled at the bid
+        Message done = oms.next();
+        assertThat(done.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.FILLED);
+        assertThat(done.getDouble(CumQty.FIELD)).isEqualTo(108.0);
+    }
+
+    @Test
     @DisplayName("a market order fills at the reference price even though it carries no Price(44)")
     void fillsAMarketOrderAtTheReferencePrice() throws Exception {
         Oms oms = connect(50L, 150L, 400L);
@@ -182,6 +255,81 @@ class LocalExchangeTest {
         Message reject = oms.next();
         assertThat(reject.getHeader().getString(MsgType.FIELD)).isEqualTo("9");   // OrderCancelReject
         assertThat(reject.getString(OrigClOrdID.FIELD)).isEqualTo(ghost.getOrderRef());
+    }
+
+    // ---------------------------------------------------------------- outcome mix (performance runs)
+
+    @Test
+    @DisplayName("outcome mix: a 100%-reject venue refuses every order, and books none of them")
+    void outcomeMixRejectsEveryOrder() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+        exchange.setOutcomeMix(new LocalExchange.OutcomeMix(100, 0, 50));
+
+        OmsOrder order = order("ORD-1752400009999-111", "BUY", 1000L, new BigDecimal("112.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BEXIMCO")), oms.sessionId);
+
+        Message rej = oms.next();
+        assertThat(rej.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.REJECTED);   // -> OMS status REJECTED
+        assertThat(rej.getString(ClOrdID.FIELD)).isEqualTo(order.getOrderRef());
+
+        // A rejected order never reached the book — so it cannot fill afterwards, and a cancel for it
+        // must come back as a reject rather than pulling something that was never there.
+        assertThat(oms.inbound.poll(1, TimeUnit.SECONDS))
+                .as("a rejected order must not go on to fill")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("outcome mix: a partial-fill venue stops at the configured share and leaves the order working")
+    void outcomeMixPartiallyFillsAndStops() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+        exchange.setOutcomeMix(new LocalExchange.OutcomeMix(0, 100, 25));   // every order fills 25% and stops
+
+        OmsOrder order = order("ORD-1752400008888-222", "BUY", 1000L, new BigDecimal("112.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BEXIMCO")), oms.sessionId);
+
+        assertThat(oms.next().getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.NEW);
+
+        Message partial = oms.next();
+        assertThat(partial.getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.PARTIALLY_FILLED);
+        assertThat(partial.getDouble(LastQty.FIELD)).isEqualTo(250.0);       // 25% of 1000
+        assertThat(partial.getDouble(CumQty.FIELD)).isEqualTo(250.0);
+        assertThat(partial.getDouble(LeavesQty.FIELD)).isEqualTo(750.0);
+
+        // …and there it stays. The order is PARTIAL and working — not filled, not cancelled — which is
+        // the state a real book leaves it in when the liquidity at its price runs out, and the state
+        // the OMS has to be able to carry.
+        assertThat(oms.inbound.poll(2, TimeUnit.SECONDS))
+                .as("a partially-filled order must not quietly complete")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("outcome mix: the default venue is all-accept, all-fill — nobody has to configure it")
+    void outcomeMixDefaultsToFillingEverything() throws Exception {
+        Oms oms = connect(50L, 150L, 400L);
+
+        assertThat(exchange.outcomeMix().rejectPct()).isZero();
+        assertThat(exchange.outcomeMix().partialPct()).isZero();
+
+        OmsOrder order = order("ORD-1752400007777-333", "BUY", 1000L, new BigDecimal("112.5000"));
+        Session.sendToTarget(new FixMessageFactory().newOrderSingle(order, security("BEXIMCO")), oms.sessionId);
+
+        assertThat(oms.next().getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.NEW);
+        assertThat(oms.next().getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.PARTIALLY_FILLED);
+        assertThat(oms.next().getChar(OrdStatus.FIELD)).isEqualTo(OrdStatus.FILLED);
+    }
+
+    @Test
+    @DisplayName("outcome mix: reject and partial shares can never add up to more than the whole")
+    void outcomeMixCannotExceedOneHundredPercent() {
+        LocalExchange.OutcomeMix m = new LocalExchange.OutcomeMix(80, 50, 50);
+        assertThat(m.rejectPct()).isEqualTo(80);
+        assertThat(m.partialPct()).isEqualTo(20);      // clamped: 80 + 20 = 100, leaving no full fills
+
+        // 0% and 100% are not partial fills; a partial that fills all of an order is just a fill.
+        assertThat(new LocalExchange.OutcomeMix(0, 10, 0).partialFillPct()).isEqualTo(1);
+        assertThat(new LocalExchange.OutcomeMix(0, 10, 100).partialFillPct()).isEqualTo(99);
     }
 
     // ---------------------------------------------------------------- harness

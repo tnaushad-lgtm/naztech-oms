@@ -40,9 +40,15 @@ fix:
 itch:
   enabled: false
   transport: simulator                         # simulator | soupbintcp | moldudp64
-  host: ${ITCH_HOST:}
-  port: ${ITCH_PORT:0}
+  host: ${ITCH_HOST:}                           # soupbintcp
+  port: ${ITCH_PORT:0}                          # soupbintcp port, or the multicast port for moldudp64
   group: ${ITCH_MOLD_GROUP:}                    # multicast group (moldudp64)
+  session: ${ITCH_SESSION:}                     # the exchange's session name; blank accepts any
+  username: ${ITCH_USER:}                       # soupbintcp login
+  password: ${ITCH_PASSWORD:}                   # put the real one in secrets.properties, never here
+  rewind-host: ${ITCH_REWIND_HOST:}             # moldudp64 retransmission server — without it, a gap
+  rewind-port: ${ITCH_REWIND_PORT:0}            #   is detected and logged, but cannot be recovered
+  network-interface: ${ITCH_NIC:}               # which NIC to join the multicast group on
   tick-ms: ${ITCH_TICK_MS:1200}                 # scheduler cadence for the pull loop
   seed: ${ITCH_SEED:20260703}                   # deterministic simulator seed
   burst: ${ITCH_BURST:30}                        # messages per tick

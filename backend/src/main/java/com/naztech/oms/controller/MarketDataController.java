@@ -5,6 +5,7 @@ import com.naztech.oms.entity.Security;
 import com.naztech.oms.entity.Trade;
 import com.naztech.oms.repo.SecurityRepo;
 import com.naztech.oms.repo.TradeRepo;
+import com.naztech.oms.service.DepthBroadcaster;
 import com.naztech.oms.service.MarketDataGateway;
 import com.naztech.oms.service.MarketDataService;
 import org.springframework.web.bind.annotation.*;
@@ -19,13 +20,16 @@ public class MarketDataController {
 
     private final MarketDataService market;
     private final MarketDataGateway depthGateway;
+    private final DepthBroadcaster depthBroadcaster;
     private final TradeRepo tradeRepo;
     private final SecurityRepo securityRepo;
 
     public MarketDataController(MarketDataService market, MarketDataGateway depthGateway,
-                               TradeRepo tradeRepo, SecurityRepo securityRepo) {
+                               DepthBroadcaster depthBroadcaster, TradeRepo tradeRepo,
+                               SecurityRepo securityRepo) {
         this.market = market;
         this.depthGateway = depthGateway;
+        this.depthBroadcaster = depthBroadcaster;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
     }
@@ -47,6 +51,25 @@ public class MarketDataController {
     public Depth depth(@PathVariable Long securityId,
                        @RequestParam(defaultValue = "5") int levels) {
         return depthGateway.depth(securityId, levels);
+    }
+
+    /**
+     * "I am looking at this book — push it to me." The terminal calls this when it selects an
+     * instrument and periodically while it stays selected; updates then arrive on the SSE stream as
+     * {@code depth} events instead of being polled for. Returns the book straight away so there is
+     * something to draw before the first push.
+     */
+    @PostMapping("/{securityId}/depth/watch")
+    public Map<String, Object> watchDepth(@PathVariable Long securityId,
+                                          @RequestParam(defaultValue = "10") int levels) {
+        return depthBroadcaster.watch(securityId, levels);
+    }
+
+    /** The book and the sequence number it is current as of — how a client re-syncs after a gap. */
+    @GetMapping("/{securityId}/depth/snapshot")
+    public Map<String, Object> depthSnapshot(@PathVariable Long securityId,
+                                             @RequestParam(defaultValue = "10") int levels) {
+        return depthBroadcaster.snapshot(securityId, levels);
     }
 
     @GetMapping("/{securityId}/candles")

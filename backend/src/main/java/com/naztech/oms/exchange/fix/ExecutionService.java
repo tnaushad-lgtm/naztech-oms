@@ -4,6 +4,7 @@ import com.naztech.oms.entity.OmsOrder;
 import com.naztech.oms.entity.Security;
 import com.naztech.oms.entity.Trade;
 import com.naztech.oms.exchange.OrderFillApplier;
+import com.naztech.oms.perf.ExecutionStats;
 import com.naztech.oms.repo.OmsOrderRepo;
 import com.naztech.oms.repo.SecurityRepo;
 import com.naztech.oms.repo.TradeRepo;
@@ -54,10 +55,11 @@ public class ExecutionService {
     private final StreamService stream;
     private final AuditService audit;
     private final OrderFillApplier fills;
+    private final ExecutionStats stats;
 
     public ExecutionService(OmsOrderRepo orderRepo, TradeRepo tradeRepo, SecurityRepo securityRepo,
                             PortfolioService portfolio, MarketDataService marketData, StreamService stream,
-                            AuditService audit, OrderFillApplier fills) {
+                            AuditService audit, OrderFillApplier fills, ExecutionStats stats) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
@@ -66,6 +68,7 @@ public class ExecutionService {
         this.stream = stream;
         this.audit = audit;
         this.fills = fills;
+        this.stats = stats;
     }
 
     @Transactional
@@ -94,6 +97,7 @@ public class ExecutionService {
             if (ordStatus == '8' && msg.isSetField(Text.FIELD)) o.setRejectReason(msg.getString(Text.FIELD));
             o.setUpdatedAt(LocalDateTime.now());
             orderRepo.save(o);
+            stats.execution(st);       // the round trip actually completed — what a perf run must count
             audit.orderEvent(o.getId(), "EXCH_" + st,
                     "FIX ExecType=" + execType + " OrdStatus=" + ordStatus + (lastQty > 0 ? " fill " + (long) lastQty : ""));
             publishOrder(o);

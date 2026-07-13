@@ -48,13 +48,22 @@ public class AiAdvisorService {
     @Value("${app.ai.gemini.key:}")   private String geminiKey;
     @Value("${app.ai.gemini.model:gemini-2.5-flash}") private String geminiModel;
 
-    public AiAdvisorService(PortfolioService portfolio, SecurityRepo securityRepo, MarketDataRepo marketRepo) {
+    private final SecuritySearchService search;
+
+    public AiAdvisorService(PortfolioService portfolio, SecurityRepo securityRepo, MarketDataRepo marketRepo,
+                            SecuritySearchService search) {
         this.portfolio = portfolio;
         this.securityRepo = securityRepo;
         this.marketRepo = marketRepo;
+        this.search = search;
     }
 
-    public record Reply(String answer, String source, boolean ai) {}
+    /** {@code route} is set when the answer is "it is on this screen" — the UI turns it into a link. */
+    public record Reply(String answer, String source, boolean ai, String route) {
+        public Reply(String answer, String source, boolean ai) {
+            this(answer, source, ai, null);
+        }
+    }
 
     public Reply advise(String message, Long accountId, String action,
                         String imageBase64, String imageMime, List<Map<String, String>> history, String lang) {
@@ -68,6 +77,15 @@ public class AiAdvisorService {
                 ? "VERY IMPORTANT: Write your ENTIRE answer in Bangla (বাংলা ভাষায় সম্পূর্ণ উত্তর দিন), "
                   + "even if the question is in English. Use Bangla for the disclaimer too."
                 : "en".equalsIgnoreCase(lang) ? "Write your answer in clear English." : "";
+
+        // "Where do I find market depth?" is a question about the product, not the market. It used to
+        // fall through to the ticker branches and come back with a gainers list — an answer shaped like
+        // an answer, to a question nobody asked. The screens are indexed by the same on-prem model that
+        // finds securities, so this works with no Gemini key and nothing leaves the exchange.
+        Reply nav = navigate(userMsg);
+        if (nav != null) {
+            return nav;
+        }
 
         String context = buildContext(accountId);
 
@@ -376,6 +394,45 @@ public class AiAdvisorService {
     }
 
     // ------------------------------------------------------------- fallback
+    /** Words that mean "take me to it", rather than "tell me about it". */
+    private static final List<String> NAV_CUES = List.of(
+            "where", "how do i", "how to", "how can i", "find", "navigate", "go to", "open the",
+            "which screen", "which page", "show me the", "take me");
+
+    /**
+     * If the user is asking where something is, answer with the screen, how to use it, and a link.
+     * A match below the threshold means we are guessing — and a confident wrong direction is worse
+     * than admitting we did not understand, so we fall through to the normal advisor instead.
+     */
+    private Reply navigate(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        String q = message.toLowerCase();
+        boolean asksWhere = NAV_CUES.stream().anyMatch(q::contains);
+        if (!asksWhere) {
+            return null;
+        }
+        List<com.naztech.oms.api.Dtos.NavHit> hits = search.findFeature(message, 30, 3);
+        if (hits.isEmpty()) {
+            return null;
+        }
+        com.naztech.oms.api.Dtos.NavHit top = hits.get(0);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("**").append(top.title()).append("**\n\n");
+        sb.append(top.what()).append("\n\n");
+        sb.append("**How:** ").append(top.how()).append("\n\n");
+        sb.append("It is at `").append(top.route()).append("` — in the left sidebar.");
+        if (hits.size() > 1) {
+            sb.append("\n\nAlso related: ");
+            sb.append(hits.subList(1, hits.size()).stream()
+                    .map(h -> h.title() + " (" + h.route() + ")")
+                    .collect(Collectors.joining(" · ")));
+        }
+        return new Reply(sb.toString(), "on-prem MiniLM (offline)", false, top.route());
+    }
+
     private String fallback(String msg, Long accountId, boolean hasImage) {
         if (hasImage)
             return "📷 To analyse an uploaded screenshot I need the Gemini AI key configured "

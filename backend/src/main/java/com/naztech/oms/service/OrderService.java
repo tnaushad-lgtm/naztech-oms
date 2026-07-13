@@ -59,8 +59,36 @@ public class OrderService {
 
     public record PlaceResult(OrderView order, RiskResult risk) {}
 
+    /**
+     * Is the raw-throughput path allowed to exist? It skips pre-trade risk, so it is switched on by
+     * the same flag that switches on the load-test controller — and on a UAT or production box, where
+     * that flag is false, {@link #place(OrderRequest, String, boolean)} cannot bypass anything even if
+     * something calls it.
+     */
+    @org.springframework.beans.factory.annotation.Value("${app.loadtest.enabled:false}")
+    private boolean loadTestEnabled;
+
     @Transactional
     public PlaceResult place(OrderRequest req, String actor) {
+        return place(req, actor, false);
+    }
+
+    /**
+     * Place an order, optionally skipping pre-trade risk.
+     *
+     * <p>{@code bypassRisk} exists for one reason: the performance report has to separate <em>how fast
+     * the OMS can write an order</em> from <em>how fast it can validate one</em>. Risk is roughly a
+     * third of the time in {@code place()}, and if you cannot measure the two apart you cannot tell a
+     * slow database from a slow rule engine, and you will optimise the wrong one. It is not an order
+     * path anyone may use: no controller reaches it, and it refuses to skip anything unless
+     * {@code app.loadtest.enabled=true}.
+     */
+    @Transactional
+    public PlaceResult place(OrderRequest req, String actor, boolean bypassRisk) {
+        if (bypassRisk && !loadTestEnabled) {
+            throw new IllegalStateException(
+                    "Risk bypass requires app.loadtest.enabled=true — it is never available in UAT or production");
+        }
         long t = System.nanoTime();
         // The security is reference data (cached); the account is not — its buying power moves on
         // every fill, so it must be read fresh or risk decisions are made on stale money.
@@ -95,7 +123,9 @@ public class OrderService {
 
         // ---- pre-trade risk ----
         t = System.nanoTime();
-        RiskResult risk = riskService.check(o);
+        RiskResult risk = bypassRisk
+                ? new RiskResult(true, "RISK BYPASSED (throughput test)", BigDecimal.ZERO, List.of())
+                : riskService.check(o);
         timings.record(OrderPhaseTimings.Phase.RISK, t);
         o.setRiskScore(risk.score());
         if (!risk.pass()) {

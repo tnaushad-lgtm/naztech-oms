@@ -16,9 +16,12 @@ import { useLive } from "@/lib/useLive";
 import { getSession } from "@/lib/session";
 import { getLists, createList, deleteList, toggleSymbol, Watchlist } from "@/lib/watchlists";
 import { nf, pct, dirColor, compact, assetLabel } from "@/lib/format";
+import { TerminalProvider, useTerminal } from "@/lib/terminalStore";
+import { DeskLayout } from "@/components/desk/DeskLayout";
 
 export default function Terminal() {
   const [exchange, setExchange] = useState("DSE");
+  const [layoutMode, setLayoutMode] = useState<"classic" | "dockable">("classic");
   const [rows, setRows] = useState<MarketRow[]>([]);
   const [selected, setSelected] = useState<MarketRow | null>(null);
   const [flash, setFlash] = useState<Record<number, "up" | "down">>({});
@@ -39,6 +42,12 @@ export default function Terminal() {
   const session = typeof window !== "undefined" ? getSession() : null;
 
   useEffect(() => { setLists(getLists()); }, []);
+  // A dealer's choice of layout is theirs; remember it.
+  useEffect(() => {
+    const saved = localStorage.getItem("oms_term_mode");
+    if (saved === "dockable" || saved === "classic") setLayoutMode(saved);
+  }, []);
+  useEffect(() => { localStorage.setItem("oms_term_mode", layoutMode); }, [layoutMode]);
   const refreshLists = () => setLists(getLists());
 
   const activeWl = lists.find((l) => l.id === activeList);
@@ -156,6 +165,17 @@ export default function Terminal() {
   const header = (
     <div className="flex items-center gap-3">
       <AiSearch onPick={onPickFromSearch} />
+      {/* The dockable layout is the same panels, arranged by the dealer: drag to move, drag borders
+          to resize, maximise, close. It remembers its own arrangement, separately from the Desk. */}
+      <div className="hidden sm:flex rounded-xl border border-line/[0.12] bg-surface/[0.05] p-0.5">
+        {(["classic", "dockable"] as const).map((m) => (
+          <button key={m} onClick={() => setLayoutMode(m)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold capitalize transition-all
+              ${layoutMode === m ? "bg-gradient-to-r from-aurora-violet to-aurora-indigo text-white shadow-glow" : "text-ink-400 hover:text-ink-100"}`}>
+            {m}
+          </button>
+        ))}
+      </div>
       <div className="hidden sm:flex rounded-xl border border-line/[0.12] bg-surface/[0.05] p-0.5">
         {["DSE", "CSE"].map((ex) => (
           <button key={ex} onClick={() => setExchange(ex)}
@@ -167,6 +187,17 @@ export default function Terminal() {
       </div>
     </div>
   );
+
+  if (layoutMode === "dockable") {
+    // The same panels as the classic terminal, but the dealer arranges them: drag to move, drag
+    // borders to resize, maximise, close. This is the Trading Desk's engine, reused rather than
+    // rebuilt — one widget system, two homes.
+    return (
+      <TerminalProvider>
+        <DockableTerminal header={header} />
+      </TerminalProvider>
+    );
+  }
 
   return (
     <Shell title="Trader Terminal" connected={connected} headerRight={header}>
@@ -244,19 +275,27 @@ export default function Terminal() {
             )}
           </div>
 
-          {/* right */}
-          <div className="col-span-12 space-y-3 lg:col-span-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-            <div className="glass-soft flex items-center gap-2 p-2">
+          {/* right — the order ticket does NOT scroll away: it is the point of the screen.
+              Only what sits under it (portfolio, news) scrolls, and the ticket's action bar is
+              sticky, so BUY/SELL is on screen at any viewport height. */}
+          <div className="col-span-12 flex flex-col gap-3 lg:col-span-3 lg:min-h-0">
+            <div className="glass-soft flex shrink-0 items-center gap-2 p-2">
               <span className="panel-title pl-1">Account</span>
               <select className="field py-1.5 text-xs" value={accountId ?? ""}
                 onChange={(e) => setAccountId(parseInt(e.target.value))}>
                 {accounts.map((a) => <option key={a.id} value={a.id} className="bg-obsidian-850">{a.name} · {a.boId}</option>)}
               </select>
             </div>
-            <OrderTicket sec={selected} accountId={accountId} dealerId={dealerId}
-              pickedPrice={pickedPrice} onPlaced={() => { loadBlotter(); if (accountId) loadPortfolio(accountId); }} />
-            <div className="h-[240px]"><Portfolio p={portfolio} /></div>
-            <div className="h-[220px]"><NewsPanel symbol={selected?.symbol} /></div>
+            {/* The ticket is a short card with two big BUY/SELL buttons; the full form opens in a
+                window over the app. Nothing here can push the trade button off the screen. */}
+            <div className="shrink-0">
+              <OrderTicket sec={selected} accountId={accountId} dealerId={dealerId}
+                pickedPrice={pickedPrice} onPlaced={() => { loadBlotter(); if (accountId) loadPortfolio(accountId); }} />
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div className="h-[240px]"><Portfolio p={portfolio} /></div>
+              <div className="h-[220px]"><NewsPanel symbol={selected?.symbol} /></div>
+            </div>
           </div>
         </div>
 
@@ -266,6 +305,17 @@ export default function Terminal() {
             onChanged={() => { loadBlotter(); if (accountId) loadPortfolio(accountId); }} />
         </div>
       </div>
+    </Shell>
+  );
+}
+
+
+/** The dockable terminal: the desk's panels, on the terminal's own saved arrangement. */
+function DockableTerminal({ header }: { header: React.ReactNode }) {
+  const t = useTerminal();
+  return (
+    <Shell title="Trader Terminal" connected={t.connected} headerRight={header}>
+      <DeskLayout ns="term" />
     </Shell>
   );
 }

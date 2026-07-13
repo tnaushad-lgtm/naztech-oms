@@ -31,6 +31,22 @@ const LT_DEFAULTS = {
   strategy: "RESTING",
   primeAccount: true,
   threads: 0,
+
+  maxLoad: false,
+  randomSecurity: false,
+  randomAccount: false,
+  randomDealer: false,
+  randomQty: false,
+  qtyMin: 100,
+  qtyMax: 5000,
+  randomSide: false,
+  randomPrice: false,
+  priceJitterPct: 2,
+  bypassValidation: false,
+
+  rejectPct: 0,
+  partialPct: 0,
+  partialFillPct: 50,
 };
 
 export default function Connectivity() {
@@ -57,7 +73,7 @@ export default function Connectivity() {
     try {
       const r: any = await post("/api/admin/loadtest/start", lt);
       setLtRun(r.status);
-      setMsg(`Throughput test running: ${lt.targetPerSec}/sec for ${lt.durationSec}s`);
+      setMsg(`Throughput test running: ${lt.maxLoad ? "max load" : lt.targetPerSec + "/sec"} for ${lt.durationSec}s`);
     } catch (e: any) { setMsg(e.message || "Could not start the throughput test"); }
     finally { setBusy(""); }
   };
@@ -180,7 +196,8 @@ export default function Connectivity() {
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
               <label className="block">
                 <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Orders / sec</span>
-                <input type="number" className="field tnum" value={lt.targetPerSec}
+                <input type="number" className="field tnum disabled:opacity-40" value={lt.targetPerSec}
+                  disabled={lt.maxLoad} title={lt.maxLoad ? "Max load ignores the target" : undefined}
                   onChange={(e) => setLt({ ...lt, targetPerSec: parseInt(e.target.value) || 1 })} />
               </label>
               <label className="block">
@@ -222,31 +239,117 @@ export default function Connectivity() {
               </div>
             </div>
 
-            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-400">
-              <input type="checkbox" checked={lt.primeAccount}
-                onChange={(e) => setLt({ ...lt, primeAccount: e.target.checked })} />
-              Prime buying power before the run — without it, fills drain the account and later orders are
-              rejected on risk (cheap rejects would flatter the rate).
-            </label>
+            {/* The order generator: what varies from one order to the next. A run where every order is
+                the same stock, client and size measures contention on three database rows, not the OMS. */}
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+              <div className="glass-soft p-3">
+                <div className="panel-title mb-2">Order generator</div>
+                <Check label="Random stock" hint="every order picks a different instrument"
+                  on={lt.randomSecurity} set={(v) => setLt({ ...lt, randomSecurity: v })} />
+                <Check label="Random client" hint="spread across all active accounts"
+                  on={lt.randomAccount} set={(v) => setLt({ ...lt, randomAccount: v })} />
+                <Check label="Random dealer" hint="multiple trader contexts"
+                  on={lt.randomDealer} set={(v) => setLt({ ...lt, randomDealer: v })} />
+                <Check label="Random side" hint="BUY or SELL — SELL needs holdings"
+                  on={lt.randomSide} set={(v) => setLt({ ...lt, randomSide: v })} />
+                <Check label="Random quantity" on={lt.randomQty} set={(v) => setLt({ ...lt, randomQty: v })} />
+                {lt.randomQty && (
+                  <div className="mt-1 flex items-center gap-2">
+                    <input type="number" className="field tnum" value={lt.qtyMin}
+                      onChange={(e) => setLt({ ...lt, qtyMin: parseInt(e.target.value) || 1 })} />
+                    <span className="text-[11px] text-ink-500">to</span>
+                    <input type="number" className="field tnum" value={lt.qtyMax}
+                      onChange={(e) => setLt({ ...lt, qtyMax: parseInt(e.target.value) || 1 })} />
+                  </div>
+                )}
+                <Check label="Random price" hint="jitter around the strategy price, so orders land on different levels"
+                  on={lt.randomPrice} set={(v) => setLt({ ...lt, randomPrice: v })} />
+                {lt.randomPrice && (
+                  <label className="mt-1 flex items-center gap-2 text-[11px] text-ink-500">
+                    ± <input type="number" className="field tnum w-20" value={lt.priceJitterPct}
+                      onChange={(e) => setLt({ ...lt, priceJitterPct: parseFloat(e.target.value) || 1 })} /> %
+                  </label>
+                )}
+              </div>
+
+              <div className="glass-soft p-3">
+                <div className="panel-title mb-2">Exchange outcome mix</div>
+                <p className="mb-2 text-[11px] leading-relaxed text-ink-500">
+                  What the venue does with each order it can trade. Only applies over FIX — the in-process
+                  simulator has its own book and fills what crosses it.
+                </p>
+                <Num label="Rejected %" v={lt.rejectPct} set={(v) => setLt({ ...lt, rejectPct: v })} />
+                <Num label="Partially filled %" v={lt.partialPct} set={(v) => setLt({ ...lt, partialPct: v })} />
+                <label className="mt-1 block">
+                  <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">…filling how much</span>
+                  <select className="field" value={lt.partialFillPct}
+                    onChange={(e) => setLt({ ...lt, partialFillPct: parseInt(e.target.value) })}>
+                    <option value={25} className="bg-obsidian-850">25%</option>
+                    <option value={50} className="bg-obsidian-850">50%</option>
+                    <option value={75} className="bg-obsidian-850">75%</option>
+                  </select>
+                </label>
+                <div className="mt-2 text-[11px] text-ink-400">
+                  Fully filled: <b className="text-bull">{Math.max(0, 100 - lt.rejectPct - lt.partialPct)}%</b>
+                </div>
+              </div>
+
+              <div className="glass-soft p-3">
+                <div className="panel-title mb-2">Load & validation</div>
+                <Check label="Max load" hint="drop the pacer — submit as fast as the box allows and report the ceiling"
+                  on={lt.maxLoad} set={(v) => setLt({ ...lt, maxLoad: v })} />
+                <Check label="Prime buying power"
+                  hint="without it, fills drain the account and later orders are rejected on risk — cheap rejects flatter the rate"
+                  on={lt.primeAccount} set={(v) => setLt({ ...lt, primeAccount: v })} />
+                <Check label="Bypass validation"
+                  hint="skip pre-trade risk: the raw write-path ceiling. The difference between this and a normal run IS the cost of risk."
+                  on={lt.bypassValidation} set={(v) => setLt({ ...lt, bypassValidation: v })} />
+                {lt.bypassValidation && (
+                  <div className="mt-2 rounded border border-bear/30 bg-bear/10 px-2 py-1.5 text-[11px] text-bear">
+                    No risk checks. Measurement only — this path refuses to run unless
+                    <span className="tnum"> app.loadtest.enabled=true</span>.
+                  </div>
+                )}
+              </div>
+            </div>
 
             {ltRun && (
               <>
                 <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
                   <Stat k="Achieved / sec" v={ltRun.achievedPerSec} big
-                    tone={ltRun.achievedPerSec >= ltRun.targetPerSec * 0.95 ? "bull" : "bear"} />
-                  <Stat k="Target / sec" v={ltRun.targetPerSec} />
+                    tone={ltRun.running ? undefined
+                      : ltRun.achievedPerSec >= ltRun.targetPerSec * 0.95 ? "bull" : "bear"} />
+                  <Stat k="Target / sec" v={lt.maxLoad ? "max" : ltRun.targetPerSec} />
+                  <Stat k="Generated" v={ltRun.generated} />
                   <Stat k="Submitted" v={ltRun.submitted} />
                   <Stat k="Accepted" v={ltRun.accepted} tone="bull" />
                   <Stat k="Risk-rejected" v={ltRun.rejected} tone={ltRun.rejected > 0 ? "bear" : undefined} />
                   <Stat k="Errors" v={ltRun.errors} tone={ltRun.errors > 0 ? "bear" : undefined} />
+                  <Stat k="Queue depth" v={ltRun.queueDepth} tone={ltRun.queueDepth > 50 ? "bear" : undefined} />
+                </div>
+
+                {/* What came back from the exchange. A rate with no executions behind it is not a working OMS. */}
+                <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+                  <Stat k="Executions" v={ltRun.executions} />
+                  <Stat k="Partial fills" v={ltRun.partialFills} />
+                  <Stat k="Full fills" v={ltRun.fullFills} tone="bull" />
+                  <Stat k="Exchange rejects" v={ltRun.exchangeRejects}
+                    tone={ltRun.exchangeRejects > 0 ? "bear" : undefined} />
                   <Stat k="p50 latency" v={`${ltRun.p50Ms} ms`} />
                   <Stat k="p99 latency" v={`${ltRun.p99Ms} ms`} />
+                  <Stat k="CPU" v={ltRun.resources?.cpuPct != null ? `${ltRun.resources.cpuPct}%` : "—"}
+                    tone={ltRun.resources?.cpuPct > 85 ? "bear" : undefined} />
+                  <Stat k="Heap" v={ltRun.resources ? `${ltRun.resources.heapUsedMb} / ${ltRun.resources.heapMaxMb} MB` : "—"} />
                 </div>
+
                 <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-ink-500">
                   <span>elapsed {ltRun.elapsedSec}s</span>
                   <span>p95 {ltRun.p95Ms} ms · max {ltRun.maxMs} ms</span>
                   <span>{ltRun.threads} submitter threads · DB pool {ltRun.dbPoolSize}</span>
+                  {ltRun.resources && <span>{ltRun.resources.threads} JVM threads · {ltRun.resources.cores} cores</span>}
+                  {ltRun.backlog > 0 && <span className="text-bear">pacer {ltRun.backlog} orders behind schedule</span>}
                 </div>
+
                 {ltRun.phaseMs && Object.keys(ltRun.phaseMs).length > 0 && (
                   <div className="mt-3">
                     <div className="panel-title mb-1.5">Where each order spends its time (mean ms)</div>
@@ -275,6 +378,28 @@ export default function Connectivity() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+function Check({ label, hint, on, set }: { label: string; hint?: string; on: boolean; set: (v: boolean) => void }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2 py-1">
+      <input type="checkbox" className="mt-0.5" checked={!!on} onChange={(e) => set(e.target.checked)} />
+      <span>
+        <span className="text-[12px] text-ink-200">{label}</span>
+        {hint && <span className="block text-[10.5px] leading-snug text-ink-500">{hint}</span>}
+      </span>
+    </label>
+  );
+}
+
+function Num({ label, v, set }: { label: string; v: number; set: (v: number) => void }) {
+  return (
+    <label className="mb-1 flex items-center justify-between gap-2">
+      <span className="text-[11px] text-ink-400">{label}</span>
+      <input type="number" min={0} max={100} className="field tnum w-24" value={v}
+        onChange={(e) => set(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))} />
+    </label>
   );
 }
 

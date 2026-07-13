@@ -16,6 +16,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -68,6 +73,14 @@ public class MarketSessionService {
 
     @Value("${market.auto-schedule:false}")
     private boolean autoSchedule;
+
+    /** The local exchange's control endpoint. Blank in production: a real venue runs its own calendar. */
+    @Value("${market.venue-control-url:http://127.0.0.1:15001}")
+    private String venueControlUrl;
+
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build();
 
     public MarketSessionService(ExchangeRepo exchangeRepo, OmsOrderRepo orderRepo,
                                 ObjectProvider<ItchGateway> itch, StreamService stream, AuditService audit) {
@@ -263,10 +276,39 @@ public class MarketSessionService {
         x.setStatus(to.name());                 // durable shadow of the authoritative field
         exchangeRepo.save(x);
 
+        tellTheVenue(to);
         audit.audit(actor, "MARKET_" + to.name(), "EXCHANGE", String.valueOf(x.getId()),
                 from + " → " + to + " (" + reason + ")");
         stream.publish("session", status(x.getCode()));
         log.info("MARKET {} → {} on {} by {} ({})", from, to, x.getCode(), actor, reason);
+    }
+
+    /**
+     * Tell the venue what phase we are in.
+     *
+     * <p>In FIX mode the exchange — not the OMS — decides what trades, so gating the OMS is only half
+     * the job: the local exchange happily filled orders during pre-open because nobody had told it the
+     * market was not open yet. A real venue runs its own calendar and needs no telling; this one does.
+     *
+     * <p>Best-effort by design. If the exchange is not running, the OMS carries on and says so — the
+     * session is still enforced on our side of the wire.
+     */
+    private void tellTheVenue(MarketSession to) {
+        if (venueControlUrl == null || venueControlUrl.isBlank()) {
+            return;
+        }
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(venueControlUrl + "/session?phase=" + to.name()))
+                    .timeout(Duration.ofSeconds(2))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build();
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            log.info("Venue told: market is {} ({})", to, res.statusCode() == 200 ? "ok" : res.body());
+        } catch (Exception e) {
+            log.warn("Could not reach the exchange control endpoint at {} ({}) — the OMS still enforces "
+                    + "the session, but the venue may fill orders it should not.", venueControlUrl, e.toString());
+        }
     }
 
     /** DAY orders do not survive the close. GTC/GTD orders do — that is the whole point of them. */

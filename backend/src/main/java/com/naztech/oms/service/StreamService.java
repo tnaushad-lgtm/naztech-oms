@@ -34,8 +34,10 @@ public class StreamService {
     private static final Logger log = LoggerFactory.getLogger(StreamService.class);
     private static final Set<String> LATEST_WINS = Set.of("market", "indices");
     // "session" is immediate for the same reason "order" is: a market halt must reach the desk now,
-    // not on the next coalescing flush.
-    private static final Set<String> IMMEDIATE = Set.of("order", "hello", "session");
+    // not on the next coalescing flush. "depth" is immediate because it is already rate-limited at
+    // source — DepthBroadcaster only emits a book that changed, only for an instrument somebody is
+    // looking at — and because coalescing it by name would collapse two instruments into one.
+    private static final Set<String> IMMEDIATE = Set.of("order", "hello", "session", "depth");
     private static final int MAX_TRADES_PER_FLUSH = 25;
     private static final int MAX_TRADE_BACKLOG = 500;
 

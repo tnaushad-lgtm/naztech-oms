@@ -30,11 +30,12 @@ public class RiskService {
     private final AiRiskScoringService ai;
     private final RefDataCache refData;
     private final MarketSessionService session;
+    private final TradeWindowRules windows;
 
     public RiskService(SecurityRepo securityRepo, RiskLimitRepo limitRepo, ClientAccountRepo accountRepo,
                        HoldingRepo holdingRepo, MarketDataRepo marketRepo, OmsOrderRepo orderRepo,
                        BrokerRepo brokerRepo, AiRiskScoringService ai, RefDataCache refData,
-                       MarketSessionService session) {
+                       MarketSessionService session, TradeWindowRules windows) {
         this.securityRepo = securityRepo;
         this.limitRepo = limitRepo;
         this.accountRepo = accountRepo;
@@ -45,6 +46,7 @@ public class RiskService {
         this.ai = ai;
         this.refData = refData;
         this.session = session;
+        this.windows = windows;
     }
 
     public RiskResult check(OmsOrder o) {
@@ -64,8 +66,6 @@ public class RiskService {
 
         long qty = o.getQuantity() == null ? 0 : o.getQuantity();
         if (qty <= 0) return reject("Quantity must be positive");
-        if (sec.getLotSize() != null && sec.getLotSize() > 1 && qty % sec.getLotSize() != 0)
-            return reject("Quantity must be a multiple of lot size " + sec.getLotSize());
 
         MarketData md = marketRepo.findById(o.getSecurityId()).orElse(null);
         BigDecimal ltp = md == null || md.getLtp() == null ? BigDecimal.ZERO : md.getLtp();
@@ -73,8 +73,19 @@ public class RiskService {
                 || o.getPrice().signum() == 0) ? ltp : o.getPrice();
         BigDecimal notional = refPx.multiply(BigDecimal.valueOf(qty));
 
+        // Board / trade-window rules: whole lots in the normal and spot markets, a floor on block
+        // trades, and an odd lot that is actually odd. The OMS stored the window for a year and never
+        // checked it, so any of those could be sent to the exchange and rejected there instead.
+        String badWindow = windows.violation(sec, o.getTradeWindow(), qty, notional);
+        if (badWindow != null) return reject(badWindow);
+
         ClientAccount acc = accountRepo.findById(o.getAccountId()).orElse(null);
         if (acc == null) return reject("Unknown client account");
+        // A closed or suspended client may not trade. The status column existed and nothing read it,
+        // so a suspended client's orders went through exactly as an active one's did — which is the
+        // kind of gap that is invisible until a regulator asks why.
+        if (acc.getStatus() != null && !"ACTIVE".equals(acc.getStatus()))
+            return reject("Client account is " + acc.getStatus() + " — trading not allowed");
 
         // ---- limit checks across applicable scopes ----
         BigDecimal effMaxOrderValue = null;
@@ -142,13 +153,20 @@ public class RiskService {
 
         long qty = o.getQuantity() == null ? 0 : o.getQuantity();
         if (qty <= 0) return reject("Quantity must be positive");
-        if (sec.getLotSize() != null && sec.getLotSize() > 1 && qty % sec.getLotSize() != 0)
-            return reject("Quantity must be a multiple of lot size " + sec.getLotSize());
 
         MarketData md = marketRepo.findById(o.getSecurityId()).orElse(null);
         BigDecimal ltp = md == null || md.getLtp() == null ? BigDecimal.ZERO : md.getLtp();
         BigDecimal refPx = (o.getPrice() == null || o.getPrice().signum() == 0) ? ltp : o.getPrice();
         BigDecimal notional = refPx.multiply(BigDecimal.valueOf(qty));
+
+        // An amend can change quantity and price, so it can walk an order out of its own market: a
+        // block trade amended down below the floor, a normal-market order amended off-lot. Same rules.
+        String badWindow = windows.violation(sec, o.getTradeWindow(), qty, notional);
+        if (badWindow != null) return reject(badWindow);
+
+        ClientAccount acc = o.getAccountId() == null ? null : accountRepo.findById(o.getAccountId()).orElse(null);
+        if (acc != null && acc.getStatus() != null && !"ACTIVE".equals(acc.getStatus()))
+            return reject("Client account is " + acc.getStatus() + " — trading not allowed");
 
         BigDecimal effMax = null;
         for (RiskLimit l : new RiskLimit[]{limit("CLIENT", o.getAccountId()),

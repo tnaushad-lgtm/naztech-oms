@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Brand } from "./Brand";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { AiAdvisor } from "./AiAdvisor";
+import { SessionBadge } from "./SessionBadge";
 import { AlertToaster } from "./AlertToaster";
 import { RoutingBadge } from "./RoutingBadge";
 import { getSession, clearSession, Session } from "@/lib/session";
@@ -17,6 +18,7 @@ const NAV = [
   { href: "/workspace", label: "Trading Desk", icon: "M4 4h7v16H4z M13 4h7v7h-7z M13 13h7v7h-7z" },
   { href: "/screener", label: "Market Screener", icon: "M3 5h18M6 12h12M10 19h4" },
   { href: "/heatmap", label: "Market Heatmap", icon: "M3 3h8v8H3z M13 3h8v5h-8z M13 10h8v11h-8z M3 13h8v8H3z" },
+  { href: "/depth", label: "Market Depth", icon: "M4 18h3V9H4z M9 18h3V5H9z M14 18h3v-7h-3z M19 18h2v-4h-2z" },
   { href: "/tape", label: "Trade Tape", icon: "M3 6h18M3 10h18M3 14h12M3 18h8" },
   { href: "/alerts", label: "Price Alerts", icon: "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9 M13.7 21a2 2 0 0 1-3.4 0" },
   { href: "/portfolio", label: "Portfolio", icon: "M21 12a9 9 0 1 1-9-9v9z M12 3a9 9 0 0 1 9 9h-9z" },
@@ -104,6 +106,7 @@ export function Shell({
           <h1 className="text-sm font-semibold text-ink-200 tracking-tight">{title}</h1>
           <div className="ml-auto flex items-center gap-3">
             {headerRight}
+            <SessionBadge />
             <RoutingBadge />
             <ThemeSwitcher />
             <div className="hidden sm:flex items-center gap-2 rounded-full border border-line/[0.1] bg-surface/[0.05] px-3 py-1.5">

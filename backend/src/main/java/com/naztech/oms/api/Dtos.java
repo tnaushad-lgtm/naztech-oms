@@ -96,6 +96,9 @@ public final class Dtos {
     public record AiHit(Long securityId, String symbol, String name, String assetClass,
                         double matchPct) {}
 
+    /** An answer to "where do I find X?" — the screen, what it does, and how to use it. */
+    public record NavHit(String route, String title, String what, String how, double matchPct) {}
+
     // ---- candles (OHLCV) ----
     public record Candle(long time, double open, double high, double low, double close, long volume) {}
 
