@@ -22,6 +22,14 @@ public class OrderService {
 
     private static final Set<String> CANCELABLE = Set.of("NEW", "PENDING_RISK", "OPEN", "PARTIAL");
 
+    /**
+     * Order-ref suffix. A random 3-digit tail gives only 900 values per millisecond, so concurrent
+     * placement collides on the {@code order_ref} UNIQUE key well below the throughput this OMS is
+     * built for — a monotonic counter cannot.
+     */
+    private static final java.util.concurrent.atomic.AtomicLong ORDER_SEQ =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
     private final SecurityRepo securityRepo;
     private final ClientAccountRepo accountRepo;
     private final OmsOrderRepo orderRepo;
@@ -54,7 +62,7 @@ public class OrderService {
                 .orElseThrow(() -> new IllegalArgumentException("Unknown account"));
 
         OmsOrder o = new OmsOrder();
-        o.setOrderRef("ORD-" + System.currentTimeMillis() + "-" + (int) (Math.random() * 900 + 100));
+        o.setOrderRef("ORD-" + System.currentTimeMillis() + "-" + ORDER_SEQ.incrementAndGet());
         o.setExchangeId(sec.getExchangeId());
         o.setBrokerId(acc.getBrokerId());
         o.setDealerId(req.dealerId());

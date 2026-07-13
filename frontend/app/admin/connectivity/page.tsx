@@ -19,13 +19,52 @@ function Row({ k, v }: { k: string; v: any }) {
   );
 }
 
+/** Seeded ids — the proprietary account has the deepest buying power, so it is the default. */
+const LT_DEFAULTS = {
+  targetPerSec: 100,
+  durationSec: 10,
+  accountId: 3,
+  securityId: 7,
+  dealerId: 4,
+  quantity: 100,
+  side: "BUY",
+  strategy: "RESTING",
+  primeAccount: true,
+  threads: 0,
+};
+
 export default function Connectivity() {
   const [s, setS] = useState<any>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
+  const [lt, setLt] = useState<any>(LT_DEFAULTS);
+  const [ltRun, setLtRun] = useState<any>(null);
 
   const load = async () => { try { setS(await get("/api/admin/connectivity/status")); } catch {} };
   useEffect(() => { load(); const t = setInterval(load, 2000); return () => clearInterval(t); }, []);
+
+  // While a run is in flight, poll fast enough to watch the rate settle.
+  useEffect(() => {
+    if (!ltRun?.running) return;
+    const t = setInterval(async () => {
+      try { setLtRun(await get("/api/admin/loadtest/status")); } catch {}
+    }, 500);
+    return () => clearInterval(t);
+  }, [ltRun?.running]);
+
+  const runLoadTest = async () => {
+    setBusy("loadtest");
+    try {
+      const r: any = await post("/api/admin/loadtest/start", lt);
+      setLtRun(r.status);
+      setMsg(`Throughput test running: ${lt.targetPerSec}/sec for ${lt.durationSec}s`);
+    } catch (e: any) { setMsg(e.message || "Could not start the throughput test"); }
+    finally { setBusy(""); }
+  };
+  const stopLoadTest = async () => {
+    try { const r: any = await post("/api/admin/loadtest/stop", {}); setLtRun(r.status); }
+    catch (e: any) { setMsg(e.message || "Stop failed"); }
+  };
 
   const fix = s?.fix || {};
   const itch = s?.itch || {};
@@ -122,7 +161,116 @@ export default function Connectivity() {
             </p>
           </div>
         </div>
+
+        {/* Throughput harness */}
+        <div className="col-span-12">
+          <div className="glass p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="panel-title">Throughput Test</div>
+              {ltRun && (
+                <span className={`chip ${ltRun.running ? "bg-aurora-cyan/15 text-aurora-cyan" : "bg-surface/[0.1] text-ink-400"}`}>
+                  {ltRun.phase}
+                </span>
+              )}
+              <span className="ml-auto text-[11px] text-ink-500">
+                Orders go through the real path — risk, matching, persistence. Routed via {ltRun?.routedVia || (s?.mode === "simulator" ? "in-process simulator" : "FIX")}.
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
+              <label className="block">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Orders / sec</span>
+                <input type="number" className="field tnum" value={lt.targetPerSec}
+                  onChange={(e) => setLt({ ...lt, targetPerSec: parseInt(e.target.value) || 1 })} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Duration (s)</span>
+                <input type="number" className="field tnum" value={lt.durationSec}
+                  onChange={(e) => setLt({ ...lt, durationSec: parseInt(e.target.value) || 1 })} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Quantity</span>
+                <input type="number" className="field tnum" value={lt.quantity}
+                  onChange={(e) => setLt({ ...lt, quantity: parseInt(e.target.value) || 1 })} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Side</span>
+                <select className="field" value={lt.side} onChange={(e) => setLt({ ...lt, side: e.target.value })}>
+                  <option value="BUY" className="bg-obsidian-850">BUY</option>
+                  <option value="SELL" className="bg-obsidian-850">SELL</option>
+                </select>
+              </label>
+              <label className="block col-span-2">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Strategy</span>
+                <select className="field" value={lt.strategy} onChange={(e) => setLt({ ...lt, strategy: e.target.value })}>
+                  <option value="RESTING" className="bg-obsidian-850">Resting — never fills (sustainable)</option>
+                  <option value="CROSSING" className="bg-obsidian-850">Crossing limit — fills</option>
+                  <option value="MARKET" className="bg-obsidian-850">Market — fills</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] uppercase tracking-wider text-ink-500">Threads</span>
+                <input type="number" className="field tnum" value={lt.threads} placeholder="auto"
+                  onChange={(e) => setLt({ ...lt, threads: parseInt(e.target.value) || 0 })} />
+              </label>
+              <div className="flex items-end gap-2">
+                {ltRun?.running ? (
+                  <button onClick={stopLoadTest} className="ghost-btn w-full">■ Stop</button>
+                ) : (
+                  <button onClick={runLoadTest} disabled={busy === "loadtest"} className="aurora-btn w-full">▶ Run</button>
+                )}
+              </div>
+            </div>
+
+            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-400">
+              <input type="checkbox" checked={lt.primeAccount}
+                onChange={(e) => setLt({ ...lt, primeAccount: e.target.checked })} />
+              Prime buying power before the run — without it, fills drain the account and later orders are
+              rejected on risk (cheap rejects would flatter the rate).
+            </label>
+
+            {ltRun && (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+                  <Stat k="Achieved / sec" v={ltRun.achievedPerSec} big
+                    tone={ltRun.achievedPerSec >= ltRun.targetPerSec * 0.95 ? "bull" : "bear"} />
+                  <Stat k="Target / sec" v={ltRun.targetPerSec} />
+                  <Stat k="Submitted" v={ltRun.submitted} />
+                  <Stat k="Accepted" v={ltRun.accepted} tone="bull" />
+                  <Stat k="Risk-rejected" v={ltRun.rejected} tone={ltRun.rejected > 0 ? "bear" : undefined} />
+                  <Stat k="Errors" v={ltRun.errors} tone={ltRun.errors > 0 ? "bear" : undefined} />
+                  <Stat k="p50 latency" v={`${ltRun.p50Ms} ms`} />
+                  <Stat k="p99 latency" v={`${ltRun.p99Ms} ms`} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-ink-500">
+                  <span>elapsed {ltRun.elapsedSec}s</span>
+                  <span>p95 {ltRun.p95Ms} ms · max {ltRun.maxMs} ms</span>
+                  <span>{ltRun.threads} submitter threads · DB pool {ltRun.dbPoolSize}</span>
+                </div>
+                {ltRun.note && <div className="mt-2 text-[11.5px] text-ink-400">{ltRun.note}</div>}
+                {ltRun.rejectReasons && Object.keys(ltRun.rejectReasons).length > 0 && (
+                  <div className="mt-2 text-[11.5px] text-bear">
+                    Rejections: {Object.entries(ltRun.rejectReasons).map(([r, n]) => `${r} × ${n}`).join(" · ")}
+                  </div>
+                )}
+                {ltRun.errorSamples?.length > 0 && (
+                  <div className="mt-1 text-[11.5px] text-bear">Errors: {ltRun.errorSamples.join(" · ")}</div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </Shell>
+  );
+}
+
+function Stat({ k, v, big, tone }: { k: string; v: any; big?: boolean; tone?: "bull" | "bear" }) {
+  const color = tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : "text-ink-100";
+  return (
+    <div className="glass-soft px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-ink-500">{k}</div>
+      <div className={`tnum font-semibold ${big ? "text-xl" : "text-base"} ${color}`}>{v ?? "—"}</div>
+    </div>
   );
 }
