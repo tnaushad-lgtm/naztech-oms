@@ -6,21 +6,39 @@ import { get, post } from "@/lib/api";
 import { useLive } from "@/lib/useLive";
 import { compact, timeOf } from "@/lib/format";
 
+const SESSION_TONE: Record<string, string> = {
+  OPEN: "bg-bull/15 text-bull",
+  PRE_OPEN: "bg-aurora-cyan/15 text-aurora-cyan",
+  HALTED: "bg-amber-400/15 text-amber-400",
+  CLOSED: "bg-bear/15 text-bear",
+};
+
 export default function AdminPage() {
   const [ov, setOv] = useState<any>({});
   const [brokers, setBrokers] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [audit, setAudit] = useState<any[]>([]);
   const [form, setForm] = useState({ exchangeId: 1, trecCode: "", name: "", firmLimit: 100000000 });
-  const { connected } = useLive(() => {});
+  const [sess, setSess] = useState<any>(null);
+  const [sessBusy, setSessBusy] = useState("");
+  // The backend pushes a "session" event on every transition, so a halt reaches the desk at once.
+  const { connected } = useLive((ev: string, data: any) => { if (ev === "session") setSess(data); });
 
   const loadAll = async () => {
     try { setOv(await get("/api/admin/overview")); } catch {}
     try { setBrokers(await get("/api/admin/brokers")); } catch {}
     try { setUsers(await get("/api/admin/users")); } catch {}
     try { setAudit(await get("/api/admin/audit")); } catch {}
+    try { setSess(await get("/api/admin/session/status?exchange=DSE")); } catch {}
   };
   useEffect(() => { loadAll(); const t = setInterval(() => get("/api/admin/overview").then(setOv).catch(() => {}), 4000); return () => clearInterval(t); }, []);
+
+  const sessionAction = async (path: string, label: string) => {
+    setSessBusy(label);
+    try { setSess(await post(`/api/admin/session/${path}?exchange=DSE`, {})); loadAll(); }
+    catch {}
+    finally { setSessBusy(""); }
+  };
 
   const onboard = async () => {
     if (!form.trecCode || !form.name) return;
@@ -47,6 +65,64 @@ export default function AdminPage() {
             <div className="text-[11px] uppercase tracking-wider text-ink-500">{k.label}</div>
           </div>
         ))}
+      </div>
+
+      {/* Market session */}
+      <div className="glass mt-4 p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <div className="panel-title">Market Session</div>
+          <span className={`chip ${SESSION_TONE[sess?.state] || "bg-surface/[0.1] text-ink-400"}`}>
+            {sess?.state || "…"}
+          </span>
+          <span className="text-[11px] text-ink-500">
+            {sess?.exchange || "DSE"} · trades {sess?.openTime?.slice(0, 5)}–{sess?.closeTime?.slice(0, 5)} Asia/Dhaka
+            {sess?.now && <> · now {sess.now.slice(0, 5)}</>}
+            {sess?.autoSchedule ? " · following the clock" : " · manual control"}
+          </span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            {sess?.state === "CLOSED" && (
+              <>
+                <button onClick={() => sessionAction("start", "start")} disabled={sessBusy === "start"}
+                  className="aurora-btn py-1.5 text-xs">▶ Start Market (pre-open)</button>
+                <button onClick={() => sessionAction("start?straightToOpen=true", "open")} disabled={sessBusy === "open"}
+                  className="ghost-btn py-1.5 text-xs">⏩ Straight to open</button>
+              </>
+            )}
+            {sess?.state === "PRE_OPEN" && (
+              <button onClick={() => sessionAction("open", "open")} disabled={sessBusy === "open"}
+                className="aurora-btn py-1.5 text-xs">🔔 Opening bell</button>
+            )}
+            {sess?.state === "OPEN" && (
+              <button onClick={() => sessionAction("halt", "halt")} disabled={sessBusy === "halt"}
+                className="ghost-btn py-1.5 text-xs">⏸ Halt</button>
+            )}
+            {sess?.state === "HALTED" && (
+              <button onClick={() => sessionAction("resume", "resume")} disabled={sessBusy === "resume"}
+                className="aurora-btn py-1.5 text-xs">▶ Resume</button>
+            )}
+            {sess?.state !== "CLOSED" && (
+              <button onClick={() => sessionAction("close", "close")} disabled={sessBusy === "close"}
+                className="ghost-btn py-1.5 text-xs">■ Close market</button>
+            )}
+            <button onClick={() => sessionAction("reset", "reset")} disabled={sessBusy === "reset"}
+              className="ghost-btn py-1.5 text-xs">↺ Reset session</button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <SessionFact k="Orders accepted" ok={sess?.acceptsOrders} />
+          <SessionFact k="Matching" ok={sess?.matching} />
+          <SessionFact k="Market data feed" ok={sess?.feedLive} />
+          <SessionFact k="Within DSE hours" ok={sess?.withinHours} />
+        </div>
+
+        <div className="mt-2 text-[11.5px] text-ink-400">
+          {sess?.state === "CLOSED" && "The market is closed: orders are rejected, nothing matches, no market data flows. Press Start Market."}
+          {sess?.state === "PRE_OPEN" && "Pre-open: orders are accepted and rest on the book, but nothing crosses until the opening bell — as at a real open."}
+          {sess?.state === "OPEN" && "Continuous trading. On open, the ITCH feed broadcast the day-start sequence: system event → tick tables → company + instrument directory → trading action."}
+          {sess?.state === "HALTED" && "Halted: new orders are refused and the feed is frozen, but the book stands and cancels remain legal."}
+          {sess?.reason ? ` · ${sess.reason}` : ""}
+        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-12 gap-4">
@@ -140,5 +216,17 @@ export default function AdminPage() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/** One consequence of the current phase, stated as a fact rather than a colour. */
+function SessionFact({ k, ok }: { k: string; ok?: boolean }) {
+  return (
+    <div className="glass-soft flex items-center justify-between px-3 py-2">
+      <span className="text-[11px] uppercase tracking-wider text-ink-500">{k}</span>
+      <span className={`text-[12.5px] font-semibold ${ok ? "text-bull" : "text-bear"}`}>
+        {ok === undefined ? "—" : ok ? "yes" : "no"}
+      </span>
+    </div>
   );
 }

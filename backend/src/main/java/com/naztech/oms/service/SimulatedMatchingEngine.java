@@ -1,5 +1,6 @@
 package com.naztech.oms.service;
 
+import com.naztech.oms.market.MarketSessionService;
 import com.naztech.oms.api.Dtos.Depth;
 import com.naztech.oms.api.Dtos.DepthLevel;
 import com.naztech.oms.entity.MarketData;
@@ -29,8 +30,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * In-process price-time-priority matching-engine simulator. Stands in for the real
  * Exchange Matching Engine behind {@link MatchingGateway}. It keeps an in-memory order
  * book per security, matches incoming orders against resting liquidity, persists trades,
- * marks portfolios, and moves the last-traded price. A background "autosim" injects
- * synthetic liquidity and flow so the tape stays alive even when the market is closed.
+ * marks portfolios, and moves the last-traded price. A background "autosim" injects synthetic
+ * liquidity and flow so the tape feels alive — but only while the market session is open: outside
+ * the session nothing ticks, nothing crosses, and in PRE_OPEN the book builds without crossing.
  */
 @Service
 @Conditional(SimulatorModeCondition.class)   // active for exchange.mode=simulator (the default); real DSE uses FixTradingGateway
@@ -48,6 +50,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     private final StreamService stream;
     private final AuditService audit;
     private final OrderFillApplier fills;
+    private final MarketSessionService session;
 
     @Value("${app.matching.autosim:true}")
     private boolean autosim;
@@ -67,7 +70,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     public SimulatedMatchingEngine(OmsOrderRepo orderRepo, TradeRepo tradeRepo, SecurityRepo securityRepo,
                                    MarketDataRepo marketRepo, PortfolioService portfolio,
                                    MarketDataService marketData, StreamService stream, AuditService audit,
-                                   OrderFillApplier fills) {
+                                   OrderFillApplier fills, MarketSessionService session) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
@@ -77,6 +80,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         this.stream = stream;
         this.audit = audit;
         this.fills = fills;
+        this.session = session;
     }
 
     // -------------------------------------------------------------- book model
@@ -184,7 +188,11 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         Book b = book(inc.securityId);
         List<Resting> opp = "BUY".equals(inc.side) ? b.asks : b.bids;
 
-        while (inc.remaining > 0) {
+        // PRE_OPEN: the book builds but does not cross. Orders rest until the opening bell, exactly
+        // as they do at a real open — so skipping this loop is the behaviour, not a shortcut.
+        boolean crossing = session.allowsMatching(dbOrder.getExchangeId());
+
+        while (crossing && inc.remaining > 0) {
             Resting best = bestEligible(opp, inc);
             if (best == null) break;
             long fillQty = Math.min(inc.remaining, best.remaining);
@@ -196,8 +204,11 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         }
 
         if (inc.remaining > 0) {
-            if ("MARKET".equalsIgnoreCase(inc.type)) {
-                // sweep remainder against synthetic liquidity at reference price
+            if ("MARKET".equalsIgnoreCase(inc.type) && crossing) {
+                // sweep remainder against synthetic liquidity at reference price.
+                // Only while the market is actually trading: in PRE_OPEN a market order has nothing
+                // to trade against — there is no price yet — so it waits on the book for the bell,
+                // as it would at a real exchange.
                 BigDecimal ref = referencePrice(inc);
                 Resting synth = synthetic(opposite(inc.side), ref, inc.remaining);
                 executeFill(inc, dbOrder, synth, inc.remaining, ref);
@@ -335,7 +346,9 @@ public class SimulatedMatchingEngine implements MatchingGateway {
      */
     @Scheduled(fixedDelayString = "${app.matching.tick-ms:1500}")
     public void tick() {
-        if (!autosim) return;
+        // Nothing happens outside the session: no synthetic depth, no synthetic flow, no stop-order
+        // triggering, no index drift. A tape that keeps ticking while the market is closed is a lie.
+        if (!autosim || !session.anyOpen()) return;
         synchronized (lock) {
             List<Security> equities = new ArrayList<>();
             for (Security s : securityRepo.findAll()) {

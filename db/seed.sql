@@ -22,15 +22,19 @@ TRUNCATE TABLE exchange;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ---------------------------------------------------------------- exchanges ---
+-- status is the trading session: the market opens when someone opens it (Exchange Admin →
+-- Market Session, or market.auto-schedule=true to follow the Dhaka clock).
 INSERT INTO exchange (code, name, timezone, currency, open_time, close_time, status) VALUES
-  ('DSE', 'Dhaka Stock Exchange PLC',     'Asia/Dhaka', 'BDT', '10:00:00', '14:30:00', 'OPEN'),
-  ('CSE', 'Chittagong Stock Exchange PLC','Asia/Dhaka', 'BDT', '10:00:00', '14:30:00', 'OPEN');
+  ('DSE', 'Dhaka Stock Exchange PLC',     'Asia/Dhaka', 'BDT', '10:00:00', '14:30:00', 'CLOSED'),
+  ('CSE', 'Chittagong Stock Exchange PLC','Asia/Dhaka', 'BDT', '10:00:00', '14:30:00', 'CLOSED');
 
 -- ------------------------------------------------------------------ broker ---
+-- The house broker is Dragon Security, the DSE-enlisted brokerage this OMS is built for.
+-- (Naztech is the IT vendor — it owns the product, not a TREC.)
 INSERT INTO broker (exchange_id, trec_code, name, status, firm_limit, contact_email) VALUES
-  ((SELECT id FROM exchange WHERE code='DSE'), 'TREC-101', 'Naztech Securities Ltd.', 'ACTIVE', 500000000, 'ops@naztech.com'),
+  ((SELECT id FROM exchange WHERE code='DSE'), 'TREC-101', 'Dragon Security', 'ACTIVE', 500000000, 'ops@dragonsecurity.com.bd'),
   ((SELECT id FROM exchange WHERE code='DSE'), 'TREC-102', 'Meridian Brokerage Ltd.', 'ACTIVE', 250000000, 'desk@meridian.com'),
-  ((SELECT id FROM exchange WHERE code='CSE'), 'CTREC-21', 'Naztech Securities Ltd. (CSE)', 'ACTIVE', 300000000, 'ops@naztech.com');
+  ((SELECT id FROM exchange WHERE code='CSE'), 'CTREC-21', 'Dragon Security (CSE)', 'ACTIVE', 300000000, 'ops@dragonsecurity.com.bd');
 
 -- ------------------------------------------------------------------- users ---
 -- password for all = demo123
@@ -50,7 +54,7 @@ INSERT INTO app_user (username, display_name, password_hash, role, broker_id, pa
 INSERT INTO client_account (broker_id, bo_id, name, cash_balance, buying_power, status) VALUES
   (@nz, '1201010000001', 'Ayesha Rahman',       5000000, 5000000, 'ACTIVE'),
   (@nz, '1201010000002', 'Kamrul Islam',         2500000, 2500000, 'ACTIVE'),
-  (@nz, '1201010000003', 'Naztech Proprietary', 50000000,50000000, 'ACTIVE');
+  (@nz, '1201010000003', 'Dragon Security Proprietary', 50000000,50000000, 'ACTIVE');
 
 -- ---------------------------------------------------------------- limits ---
 -- Firm-level

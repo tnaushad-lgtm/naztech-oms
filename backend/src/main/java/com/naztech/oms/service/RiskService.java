@@ -1,6 +1,7 @@
 package com.naztech.oms.service;
 
 import com.naztech.oms.api.Dtos.RiskResult;
+import com.naztech.oms.market.MarketSessionService;
 import com.naztech.oms.entity.*;
 import com.naztech.oms.repo.*;
 import org.springframework.stereotype.Service;
@@ -28,10 +29,12 @@ public class RiskService {
     private final BrokerRepo brokerRepo;
     private final AiRiskScoringService ai;
     private final RefDataCache refData;
+    private final MarketSessionService session;
 
     public RiskService(SecurityRepo securityRepo, RiskLimitRepo limitRepo, ClientAccountRepo accountRepo,
                        HoldingRepo holdingRepo, MarketDataRepo marketRepo, OmsOrderRepo orderRepo,
-                       BrokerRepo brokerRepo, AiRiskScoringService ai, RefDataCache refData) {
+                       BrokerRepo brokerRepo, AiRiskScoringService ai, RefDataCache refData,
+                       MarketSessionService session) {
         this.securityRepo = securityRepo;
         this.limitRepo = limitRepo;
         this.accountRepo = accountRepo;
@@ -41,11 +44,16 @@ public class RiskService {
         this.brokerRepo = brokerRepo;
         this.ai = ai;
         this.refData = refData;
+        this.session = session;
     }
 
     public RiskResult check(OmsOrder o) {
         Security sec = refData.security(o.getSecurityId()).orElse(null);
         if (sec == null) return reject("Unknown security");
+        // Market session — the outermost gate, checked before everything else: a closed market
+        // outranks a halted broker, which outranks a suspended instrument.
+        String closed = session.blockReason(sec.getExchangeId());
+        if (closed != null) return reject(closed);
         // RMS kill-switch: a halted/suspended broker cannot trade. Read fresh, never cached — a halt
         // must bite the instant it is applied, whoever applied it and on whichever node. See RefDataCache.
         Broker br = o.getBrokerId() == null ? null : brokerRepo.findById(o.getBrokerId()).orElse(null);
@@ -123,6 +131,10 @@ public class RiskService {
     public RiskResult checkAmend(OmsOrder o) {
         Security sec = securityRepo.findById(o.getSecurityId()).orElse(null);
         if (sec == null) return reject("Unknown security");
+        // An amend is a new order in every way that matters, so the session gate applies here too —
+        // otherwise a halt could be walked around by amending a working order instead of placing one.
+        String closed = session.blockReason(sec.getExchangeId());
+        if (closed != null) return reject(closed);
         Broker br = o.getBrokerId() == null ? null : brokerRepo.findById(o.getBrokerId()).orElse(null);
         if (br != null && !"ACTIVE".equals(br.getStatus()))
             return reject("Broker trading halted by RMS kill-switch (" + br.getStatus() + ")");

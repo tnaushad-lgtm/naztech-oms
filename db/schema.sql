@@ -37,7 +37,10 @@ CREATE TABLE exchange (
   currency     VARCHAR(8)   NOT NULL DEFAULT 'BDT',
   open_time    TIME         NOT NULL DEFAULT '10:00:00',
   close_time   TIME         NOT NULL DEFAULT '14:30:00',
-  status       VARCHAR(16)  NOT NULL DEFAULT 'OPEN' -- OPEN / CLOSED / HALTED
+  -- The trading session, owned by MarketSessionService and restored from here on startup.
+  -- Starts CLOSED: a market is closed until someone opens it, and an OMS that comes up trading
+  -- because nobody said otherwise is not one you want on a Sunday morning.
+  status       VARCHAR(16)  NOT NULL DEFAULT 'CLOSED' -- CLOSED / PRE_OPEN / OPEN / HALTED
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------------ broker ---

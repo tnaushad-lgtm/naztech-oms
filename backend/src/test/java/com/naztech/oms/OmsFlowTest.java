@@ -49,6 +49,18 @@ class OmsFlowTest {
     @Autowired PortfolioService portfolioService;
     @Autowired EquityService equityService;
     @Autowired com.naztech.oms.service.AiAdvisorService advisorService;
+    @Autowired com.naztech.oms.market.MarketSessionService marketSession;
+
+    /**
+     * Open the market before every test. Orders are only accepted while the session is open, and the
+     * session is persisted in the exchange row — so without this the suite would pass or fail
+     * depending on whether someone had left the market open in the database, which is no way to run
+     * a test.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void openTheMarket() {
+        marketSession.start("DSE", true, "test");
+    }
 
     private ClientAccount bracBankSeller() { return client1(); } // holds BRACBANK 10000 @45 (seed)
 
@@ -62,7 +74,9 @@ class OmsFlowTest {
         LoginResponse r = authService.login("dealer1", "demo123");
         assertThat(r.token()).isNotBlank();
         assertThat(r.role()).isEqualTo("DEALER");
-        assertThat(r.brokerName()).contains("Naztech");
+        // The dealer trades for Dragon Security, the DSE-enlisted brokerage. Naztech is the vendor
+        // that builds this OMS — it holds no TREC and appears on no broker row.
+        assertThat(r.brokerName()).contains("Dragon Security");
     }
 
     @Test
@@ -160,6 +174,43 @@ class OmsFlowTest {
         } finally {
             b.setStatus("ACTIVE");
             brokerRepo.save(b);
+        }
+    }
+
+    @Test
+    void closed_market_blocks_orders() {
+        marketSession.close("DSE", "test");
+        try {
+            OrderRequest req = new OrderRequest(client1().getId(), gp().getId(), "BUY", "MARKET",
+                    "NORMAL", "DAY", null, null, null, 100L, dealerId());
+            OrderService.PlaceResult res = orderService.place(req, "dealer1");
+
+            assertThat(res.risk().pass()).isFalse();
+            assertThat(res.order().status()).isEqualTo("REJECTED");
+            assertThat(res.order().rejectReason()).containsIgnoringCase("market is closed");
+        } finally {
+            marketSession.start("DSE", true, "test");
+        }
+    }
+
+    @Test
+    void pre_open_accepts_the_order_but_does_not_trade_it() {
+        marketSession.close("DSE", "test");
+        marketSession.start("DSE", false, "test");     // PRE_OPEN: the book builds, nothing crosses
+        try {
+            // A market order would cross instantly in continuous trading; in pre-open it must not.
+            OrderRequest req = new OrderRequest(client1().getId(), gp().getId(), "BUY", "MARKET",
+                    "NORMAL", "DAY", null, null, null, 100L, dealerId());
+            OrderService.PlaceResult res = orderService.place(req, "dealer1");
+
+            assertThat(res.risk().pass()).as("pre-open accepts orders").isTrue();
+            assertThat(res.order().status())
+                    .as("nothing trades before the opening bell")
+                    .isNotEqualTo("FILLED");
+            assertThat(res.order().filledQty()).isZero();
+            orderService.cancel(res.order().id(), "test");   // tidy up
+        } finally {
+            marketSession.start("DSE", true, "test");
         }
     }
 

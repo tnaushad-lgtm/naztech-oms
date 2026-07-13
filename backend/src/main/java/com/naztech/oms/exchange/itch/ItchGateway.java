@@ -60,6 +60,8 @@ public class ItchGateway implements MarketDataGateway {
     private final Random rnd = new Random();
     private ItchSource source;
     private volatile boolean ready = false;
+    /** False while the market is halted: the books stand, but no new messages are pulled. */
+    private volatile boolean feedLive = false;
 
     public ItchGateway(SecurityRepo securityRepo, MarketDataRepo marketRepo, MarketDataService marketData,
                        StreamService stream, ItchProperties props) {
@@ -70,20 +72,47 @@ public class ItchGateway implements MarketDataGateway {
         this.props = props;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void bootstrap() {
+    /**
+     * Opens the trading day: broadcasts the ITCH day-start sequence, then brings the feed up.
+     *
+     * <p>The feed no longer starts itself at boot — {@code MarketSessionService} owns the session, and
+     * a market-data feed running while the market is closed is exactly the fiction this control was
+     * built to remove. Called on Start Market, and on startup if the persisted session says the
+     * market was open.
+     *
+     * <p>The day-start messages go through the same {@link #wire} codec round-trip as live traffic,
+     * so a client rebuilding its world from the feed sees the real binary sequence: session start,
+     * tick tables, companies, the instrument directory, then "this book is trading".
+     */
+    public void openMarket() {
         synchronized (lock) {
+            if (ready) {
+                log.debug("ITCH: already open");
+                return;
+            }
+            List<Security> listed = new ArrayList<>();
             List<ItchSimulator.Instrument> instruments = new ArrayList<>();
             for (Security s : securityRepo.findAll()) {
                 if (!"ACTIVE".equals(s.getStatus())) continue;
                 if ("INDEX".equals(s.getAssetClass())) { indexIds.add(s.getId()); continue; }
                 symbols.put(s.getId(), s.getSymbol());
                 books.put(s.getId(), new ItchOrderBook());
+                listed.add(s);
                 long ref = refPriceRaw(s.getId());
                 long tick = tickRaw(s);
                 instruments.add(new ItchSimulator.Instrument(s.getId(), s.getSymbol(), s.getName(), ref, PRICE_DECIMALS, tick));
             }
             if (instruments.isEmpty()) { log.warn("ITCH: no active equities to simulate"); return; }
+
+            // The morning broadcast: system event -> tick tables -> companies -> instrument directory
+            // -> trading action. This is what a broker's feed handler consumes to build its universe.
+            long ts = System.currentTimeMillis() / 1000;
+            int broadcast = 0;
+            for (Itch.Msg m : ItchDayBroadcast.open(listed, ts, PRICE_DECIMALS)) {
+                route(wire(m));
+                broadcast++;
+            }
+
             try {
                 source = buildSource(instruments);
             } catch (IOException e) {
@@ -92,8 +121,53 @@ public class ItchGateway implements MarketDataGateway {
             }
             for (Itch.Msg m : source.open()) route(wire(m));   // seed the books
             ready = true;
-            log.info("ITCH feed active (source='{}', transport='{}') — {} instruments, {} index tickers. Market depth is now ITCH-driven.",
-                    source.name(), props.getTransport(), instruments.size(), indexIds.size());
+            feedLive = true;
+            log.info("ITCH MARKET OPEN — broadcast {} day-start messages ({} instruments, {} indices), "
+                            + "feed live (source='{}', transport='{}')",
+                    broadcast, instruments.size(), indexIds.size(), source.name(), props.getTransport());
+        }
+    }
+
+    /** Closes the trading day: end-of-day ITCH messages, feed down, books cleared. */
+    public void closeMarket() {
+        synchronized (lock) {
+            if (ready) {
+                long ts = System.currentTimeMillis() / 1000;
+                List<Security> listed = securityRepo.findAll().stream()
+                        .filter(s -> "ACTIVE".equals(s.getStatus()) && !"INDEX".equals(s.getAssetClass()))
+                        .toList();
+                for (Itch.Msg m : ItchDayBroadcast.close(listed, ts)) {
+                    route(wire(m));
+                }
+            }
+            ready = false;
+            feedLive = false;
+            if (source != null) {
+                try { source.close(); } catch (IOException e) { log.debug("ITCH source close: {}", e.toString()); }
+                source = null;
+            }
+            books.clear();
+            orderToSecurity.clear();
+            symbols.clear();
+            indexIds.clear();
+            log.info("ITCH MARKET CLOSED — feed stopped, books cleared");
+        }
+    }
+
+    /** Mid-session halt: the feed stays connected, the books stand, but nothing new flows. */
+    public void haltFeed(boolean halted) {
+        synchronized (lock) {
+            if (ready) {
+                long ts = System.currentTimeMillis() / 1000;
+                List<Security> listed = securityRepo.findAll().stream()
+                        .filter(s -> "ACTIVE".equals(s.getStatus()) && !"INDEX".equals(s.getAssetClass()))
+                        .toList();
+                for (Itch.Msg m : ItchDayBroadcast.tradingAction(listed, ts, halted ? 'H' : 'T')) {
+                    route(wire(m));
+                }
+            }
+            feedLive = !halted;
+            log.info("ITCH feed {}", halted ? "HALTED" : "RESUMED");
         }
     }
 
@@ -116,6 +190,8 @@ public class ItchGateway implements MarketDataGateway {
     @EventListener(ContextClosedEvent.class)
     public void shutdown() {
         synchronized (lock) {
+            ready = false;
+            feedLive = false;
             if (source != null) {
                 try { source.close(); } catch (IOException e) { log.debug("ITCH source close: {}", e.toString()); }
                 source = null;
@@ -123,10 +199,15 @@ public class ItchGateway implements MarketDataGateway {
         }
     }
 
-    /** Stream continuous ITCH market activity. Runs only while this bean exists (itch.enabled=true). */
+    /** Is the feed up? Reported on the connectivity screen. */
+    public boolean isLive() {
+        return ready && feedLive;
+    }
+
+    /** Stream continuous ITCH market activity — only while the market is actually open. */
     @Scheduled(fixedDelayString = "${itch.tick-ms:1200}")
     public void tick() {
-        if (!ready || source == null) return;
+        if (!ready || !feedLive || source == null) return;
         synchronized (lock) {
             for (Itch.Msg m : source.poll()) route(wire(m));
             driftIndices();

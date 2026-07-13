@@ -16,6 +16,9 @@ public interface OmsOrderRepo extends JpaRepository<OmsOrder, Long> {
     List<OmsOrder> findBySecurityIdAndSideAndStatusIn(Long securityId, String side, List<String> statuses);
     List<OmsOrder> findByStatusIn(List<String> statuses);
 
+    /** Working orders on one exchange — used at the close to expire the day's unfilled orders. */
+    List<OmsOrder> findByExchangeIdAndStatusIn(Long exchangeId, List<String> statuses);
+
     @Query("select o from OmsOrder o where o.accountId = :accountId and o.securityId = :securityId " +
            "and o.side = :side and o.status in :statuses")
     List<OmsOrder> findWashCandidates(@Param("accountId") Long accountId,
