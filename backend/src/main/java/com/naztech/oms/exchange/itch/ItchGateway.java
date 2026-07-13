@@ -4,6 +4,7 @@ import com.naztech.oms.api.Dtos.Depth;
 import com.naztech.oms.entity.MarketData;
 import com.naztech.oms.entity.Security;
 import com.naztech.oms.exchange.config.ItchProperties;
+import com.naztech.oms.marketstore.HotStore;
 import com.naztech.oms.repo.MarketDataRepo;
 import com.naztech.oms.repo.SecurityRepo;
 import com.naztech.oms.service.MarketDataGateway;
@@ -45,12 +46,14 @@ public class ItchGateway implements MarketDataGateway {
 
     private static final Logger log = LoggerFactory.getLogger(ItchGateway.class);
     private static final int PRICE_DECIMALS = 2;
+    private static final int DEPTH_LEVELS = 10;   // what a ladder shows; enough for the terminal
 
     private final SecurityRepo securityRepo;
     private final MarketDataRepo marketRepo;
     private final MarketDataService marketData;
     private final StreamService stream;
     private final ItchProperties props;
+    private final HotStore hot;
 
     private final Map<Long, ItchOrderBook> books = new ConcurrentHashMap<>();   // securityId → book
     private final Map<Long, Long> orderToSecurity = new ConcurrentHashMap<>();  // orderNumber → securityId
@@ -64,12 +67,13 @@ public class ItchGateway implements MarketDataGateway {
     private volatile boolean feedLive = false;
 
     public ItchGateway(SecurityRepo securityRepo, MarketDataRepo marketRepo, MarketDataService marketData,
-                       StreamService stream, ItchProperties props) {
+                       StreamService stream, ItchProperties props, HotStore hot) {
         this.securityRepo = securityRepo;
         this.marketRepo = marketRepo;
         this.marketData = marketData;
         this.stream = stream;
         this.props = props;
+        this.hot = hot;
     }
 
     /**
@@ -212,8 +216,26 @@ public class ItchGateway implements MarketDataGateway {
             for (Itch.Msg m : source.poll()) route(wire(m));
             driftIndices();
             if (props.isValidate()) validateBooks();
+            snapshotDepth();
         }
         stream.publish("market", Map.of("type", "itch", "ts", 0));
+    }
+
+    /**
+     * Publish each book's ladder to the hot store, so depth can be served without this JVM's book —
+     * by a second OMS instance, or by anything else that needs it. Today the book lives in a HashMap
+     * here and nowhere else: restart the process and the depth is simply gone.
+     */
+    private void snapshotDepth() {
+        if (!hot.isLive()) {
+            return;
+        }
+        for (Long securityId : books.keySet()) {
+            ItchOrderBook b = books.get(securityId);
+            if (b == null) continue;
+            hot.putDepth(securityId, b.depth(symbols.getOrDefault(securityId, "?"), ltp(securityId),
+                    PRICE_DECIMALS, DEPTH_LEVELS));
+        }
     }
 
     /** Opt-in ({@code itch.validate=true}): surface any order-book invariant violations from the live feed. */

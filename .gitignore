@@ -48,3 +48,7 @@ cloudflared.exe
 # credential-bearing deliverables — contain a live FIXSIM login, never commit
 docs/exchange-connectivity/build_fix_itch_summary.py
 docs/exchange-connectivity/Naztech_OMS_FIX_ITCH_Connectivity_Summary.docx
+
+# ---- market-data plane ----
+questdb-data/
+tools/

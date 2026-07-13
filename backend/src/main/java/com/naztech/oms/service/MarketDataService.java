@@ -26,14 +26,20 @@ public class MarketDataService {
     private final com.naztech.oms.repo.TradeRepo tradeRepo;
     private final StreamService stream;
 
+    private final com.naztech.oms.marketstore.TickStore ticks;
+    private final com.naztech.oms.marketstore.HotStore hot;
+
     public MarketDataService(SecurityRepo securityRepo, MarketDataRepo marketRepo,
                              ExchangeRepo exchangeRepo, com.naztech.oms.repo.TradeRepo tradeRepo,
-                             StreamService stream) {
+                             StreamService stream, com.naztech.oms.marketstore.TickStore ticks,
+                             com.naztech.oms.marketstore.HotStore hot) {
         this.securityRepo = securityRepo;
         this.marketRepo = marketRepo;
         this.exchangeRepo = exchangeRepo;
         this.tradeRepo = tradeRepo;
         this.stream = stream;
+        this.ticks = ticks;
+        this.hot = hot;
     }
 
     // -------------------------------------------------------------- candles
@@ -43,6 +49,15 @@ public class MarketDataService {
      * a deterministic synthetic series anchored to the LTP is returned so the chart is never empty.
      */
     public List<com.naztech.oms.api.Dtos.Candle> candles(Long securityId, int bucketSec, int limit) {
+        // Real candles, built from the tick history by the time-series store. This is what the chart
+        // is supposed to show. Everything below is the fallback for when there is no tick store: the
+        // old bucketing of the last 1000 trades, and — when even that is too thin — a synthetic
+        // random walk, which is honest only because there was never any history to draw.
+        List<com.naztech.oms.api.Dtos.Candle> fromTicks = ticks.candles(securityId, bucketSec, limit);
+        if (fromTicks.size() >= 5) {
+            return fromTicks;
+        }
+
         List<com.naztech.oms.api.Dtos.Candle> out = new ArrayList<>();
         if (bucketSec < 86400) {
             List<com.naztech.oms.entity.Trade> trades = tradeRepo.findTop1000BySecurityIdOrderByExecutedAtDesc(securityId);
@@ -212,7 +227,15 @@ public class MarketDataService {
         return n;
     }
 
-    /** Called by the matching engine after a fill to move the last-traded price. */
+    /**
+     * Called after every fill — by the matching engine, by the FIX execution path, and by the ITCH
+     * feed — to move the last-traded price.
+     *
+     * <p>Three things happen to a trade print now: it is appended to the tick store (history, and the
+     * source of every candle), it is written to the hot store (the live picture other instances read),
+     * and it updates the MySQL snapshot (the durable last-known state). Only the last of those existed
+     * before, and it was the one that threw the tick itself away.
+     */
     @Transactional
     public void applyTrade(Long securityId, BigDecimal price, long qty, BigDecimal bestBid, BigDecimal bestAsk) {
         MarketData m = marketRepo.findById(securityId).orElseGet(() -> {
@@ -234,6 +257,15 @@ public class MarketDataService {
         m.setSource("ME");
         m.setUpdatedAt(LocalDateTime.now());
         marketRepo.save(m);
+
+        // The tick itself — the thing that used to be published to the browser and then dropped.
+        ticks.tick(securityId, symbolOf(securityId), price, qty, System.currentTimeMillis());
+        hot.putQuote(securityId, new com.naztech.oms.marketstore.HotStore.Quote(price, m.getBid(), m.getAsk(),
+                nzL(m.getVolume()), m.getTrades() == null ? 0 : m.getTrades()));
+    }
+
+    private String symbolOf(Long securityId) {
+        return securityRepo.findById(securityId).map(com.naztech.oms.entity.Security::getSymbol).orElse("?");
     }
 
     /** Update an index value (from the ITCH Index [Z] feed). */
