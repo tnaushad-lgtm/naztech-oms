@@ -101,6 +101,17 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <!-- Runs the local FIX exchange (start-local-exchange.bat) as its own process,
+                 outside Spring: mvn exec:java -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>com.naztech.oms.exchange.fixsim.LocalExchangeMain</mainClass>
+                    <classpathScope>compile</classpathScope>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

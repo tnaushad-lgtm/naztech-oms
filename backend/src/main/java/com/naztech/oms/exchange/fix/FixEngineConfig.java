@@ -91,10 +91,11 @@ public class FixEngineConfig {
         s.setString(sid, "StartTime", "00:00:00");
         s.setString(sid, "EndTime", "00:00:00");
         s.setString(sid, "UseDataDictionary", "Y");
-        // FIX 5.0 SP1 rides on FIXT.1.1: transport dictionary is FIXT11, application dictionary FIX50SP1.
-        // Both ship inside the quickfixj-messages jars and resolve from the classpath by name.
-        s.setString(sid, "TransportDataDictionary", "FIXT11.xml");
-        s.setString(sid, "AppDataDictionary", "FIX50SP1.xml");
+        // FIX 5.x rides on FIXT.1.1: transport dictionary is FIXT11, application dictionary follows
+        // defaultApplVerId (DSE = FIX50SP1, FIXSIM pins FIX50SP2). Both ship inside the
+        // quickfixj-messages jars and resolve from the classpath by name.
+        s.setString(sid, "TransportDataDictionary", props.getTransportDataDictionary());
+        s.setString(sid, "AppDataDictionary", props.getAppDataDictionary());
         s.setString(sid, "ResetOnLogon", props.isResetSeqNumFlag() ? "Y" : "N");
         if (props.isSsl()) {
             s.setString(sid, "SocketUseSSL", "Y");

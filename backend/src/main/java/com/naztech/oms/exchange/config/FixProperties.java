@@ -22,8 +22,14 @@ public class FixProperties {
     /** FIXT.1.1 transport for FIX 5.0 SP1. */
     private String beginString = "FIXT.1.1";
 
-    /** Application version negotiated at logon. */
+    /** Application version negotiated at logon (tag 1137). DSE = FIX.5.0SP1; FIXSIM pins FIX.5.0SP2. */
     private String defaultApplVerId = "FIX.5.0SP1";
+
+    /** QuickFIX/J application dictionary. Must match {@link #defaultApplVerId} or the acceptor drops the logon. */
+    private String appDataDictionary = "FIX50SP1.xml";
+
+    /** QuickFIX/J transport dictionary — FIXT.1.1 for every FIX 5.x session. */
+    private String transportDataDictionary = "FIXT11.xml";
 
     private String host;
     private int port = 0;

@@ -13,13 +13,20 @@ exchange:
   mode: simulator
 
 fix:
-  # Connect the FIX session? Currently pointed at the IBCS-Primax FIXSIM trial (expires 2026-07-10).
-  # This is independent of exchange.mode: the demo still runs on the simulator; the OMS just also
-  # logs on to FIXSIM in the background so we can prove real FIX connectivity. Set false to stop dialing.
+  # Connect the FIX session? Independent of exchange.mode: the demo still runs on the simulator;
+  # the OMS just also logs on in the background so we can prove real FIX connectivity.
+  # Set false to stop dialing.
   enabled: ${FIX_ENABLED:true}
-  begin-string: FIXT.1.1                        # FIX 5.0 SP1 rides on FIXT.1.1 (matches DSE)
-  default-appl-ver-id: FIX.5.0SP1
-  host: ${FIX_HOST:172.200.171.157}            # FIXSIM demo endpoint
+  begin-string: FIXT.1.1                        # every FIX 5.x session rides on FIXT.1.1 (matches DSE)
+  # Application version (tag 1137) + its dictionary — the two must agree or the acceptor drops the
+  # logon. FIX.5.0SP1 is what DSE certifies on, and quickfixj-messages-fix50sp1 is the only message
+  # jar on the classpath (there are no SP2 message classes), so SP1 it is.
+  default-appl-ver-id: ${FIX_APPL_VER_ID:FIX.5.0SP1}
+  app-data-dictionary: ${FIX_APP_DICTIONARY:FIX50SP1.xml}
+  # Default endpoint = the LOCAL exchange (start-local-exchange.bat), which plays the venue on this
+  # machine. The hosted FIXSIM trial (172.200.171.157:15000) refuses logons without a paid
+  # subscription. For real DSE, override FIX_HOST/FIX_PORT/FIX_*_COMP_ID — no code changes.
+  host: ${FIX_HOST:127.0.0.1}
   port: ${FIX_PORT:15000}
   sender-comp-id: ${FIX_SENDER_COMP_ID:TareqN}      # OUR identity (reverse of FIXSIM's perspective)
   target-comp-id: ${FIX_TARGET_COMP_ID:FIXSIMDEMO}  # the FIXSIM counterparty

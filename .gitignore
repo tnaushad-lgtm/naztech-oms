@@ -34,6 +34,8 @@ backend/fixlog/
 backend/fixstore/
 fixlog/
 fixstore/
+backend/exchangelog/
+exchangelog/
 
 # ITCH session captures (binary market-data recordings)
 backend/itchlog/
