@@ -29,21 +29,62 @@ public class AiController {
     private final ClientAccountRepo accountRepo;
     private final com.naztech.oms.service.AiAdvisorService advisor;
     private final AiOrderService aiOrder;
+    private final com.naztech.oms.service.RealtimeVoiceService realtime;
 
     public AiController(SecuritySearchService search, RiskService riskService,
                         SecurityRepo securityRepo, ClientAccountRepo accountRepo,
-                        com.naztech.oms.service.AiAdvisorService advisor, AiOrderService aiOrder) {
+                        com.naztech.oms.service.AiAdvisorService advisor, AiOrderService aiOrder,
+                        com.naztech.oms.service.RealtimeVoiceService realtime) {
         this.search = search;
         this.riskService = riskService;
         this.securityRepo = securityRepo;
         this.accountRepo = accountRepo;
         this.advisor = advisor;
         this.aiOrder = aiOrder;
+        this.realtime = realtime;
     }
 
     public record AdvisorRequest(String message, Long accountId, String action,
                                  String imageBase64, String imageMime,
-                                 java.util.List<java.util.Map<String, String>> history, String lang) {}
+                                 java.util.List<java.util.Map<String, String>> history, String lang,
+                                 String provider) {}
+
+    /** What the AI panel may offer: which providers have keys, and whether live voice is available. */
+    @GetMapping("/providers")
+    public Map<String, Object> providers() {
+        return advisor.providers();
+    }
+
+    /**
+     * Open a live speech-to-speech session (ChatGPT's "live voice").
+     *
+     * <p>Returns a <b>short-lived</b> token the browser uses to place its own WebRTC call straight to
+     * OpenAI — our real API key never leaves this process. The audio does not pass through the OMS:
+     * relaying it would add exactly the latency that makes the feature worth having.
+     *
+     * <p>The session is minted with the live OMS picture already in its instructions, so the assistant
+     * knows this dealer's holdings and today's market before the first word is spoken.
+     */
+    @PostMapping("/realtime/session")
+    public ResponseEntity<?> realtimeSession(@RequestBody(required = false) Map<String, Object> req) {
+        Long accountId = null;
+        String lang = "en";
+        if (req != null) {
+            Object a = req.get("accountId");
+            if (a instanceof Number n) accountId = n.longValue();
+            if (req.get("lang") != null) lang = String.valueOf(req.get("lang"));
+        }
+        var session = realtime.open(accountId, lang);
+        if (session == null) {
+            return ResponseEntity.status(503).body(Map.of("error",
+                    "Live voice is not configured — set app.ai.openai.key in secrets.properties and restart."));
+        }
+        return ResponseEntity.ok(Map.of(
+                "token", session.token(),
+                "expiresAt", session.expiresAt(),
+                "model", session.model(),
+                "voice", session.voice()));
+    }
 
     @GetMapping("/tts")
     public ResponseEntity<byte[]> tts(@RequestParam String text, @RequestParam(defaultValue = "en") String lang,
@@ -57,7 +98,7 @@ public class AiController {
     public ResponseEntity<?> advisor(@RequestBody AdvisorRequest req) {
         try {
             var r = advisor.advise(req.message(), req.accountId(), req.action(),
-                    req.imageBase64(), req.imageMime(), req.history(), req.lang());
+                    req.imageBase64(), req.imageMime(), req.history(), req.lang(), req.provider());
             Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("answer", r.answer());
         out.put("source", r.source());

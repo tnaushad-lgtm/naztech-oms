@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { post, API } from "@/lib/api";
+import { post, get, API } from "@/lib/api";
 import { getSession } from "@/lib/session";
+import { useRealtimeVoice } from "@/lib/useRealtimeVoice";
 
 type Msg = { role: "user" | "assistant"; text: string; source?: string; ai?: boolean; route?: string };
 
@@ -51,12 +52,32 @@ export function AiAdvisor() {
   const [listening, setListening] = useState(false);
   const [image, setImage] = useState<{ b64: string; mime: string; name: string } | null>(null);
   const [speaking, setSpeaking] = useState(false);
+  const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
+  const [providers, setProviders] = useState<any>(null);
   const recRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const session = typeof window !== "undefined" ? getSession() : null;
 
+  // Live speech-to-speech (ChatGPT Realtime). A separate mode, not a better microphone: the audio
+  // goes straight to the model and comes back as speech, and you can cut it off mid-sentence.
+  const voice = useRealtimeVoice();
+  const [liveMode, setLiveMode] = useState(false);
+
+  useEffect(() => {
+    get<any>("/api/ai/providers").then(setProviders).catch(() => {});
+  }, []);
+
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [msgs, busy]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [voice.turns]);
+
+  const startLive = async () => {
+    stopSpeaking();
+    if (listening) recRef.current?.stop();
+    setLiveMode(true);
+    await voice.start(session?.defaultAccountId, lang);
+  };
+  const stopLive = () => { voice.stop(); setLiveMode(false); };
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audiosRef = useRef<HTMLAudioElement[]>([]);
@@ -104,7 +125,8 @@ export function AiAdvisor() {
     playNext();
   };
 
-  const closeDrawer = () => { stopSpeaking(); if (listening) recRef.current?.stop(); setOpen(false); };
+  // A live session bills by the second of audio, so it must never survive the drawer closing.
+  const closeDrawer = () => { stopSpeaking(); if (listening) recRef.current?.stop(); stopLive(); setOpen(false); };
 
   function onPasteImage(e: React.ClipboardEvent) {
     const items = e.clipboardData?.items;
@@ -130,7 +152,7 @@ export function AiAdvisor() {
     const img = image; setImage(null);
     try {
       const r: any = await post("/api/ai/advisor", {
-        message, accountId: session?.defaultAccountId, action, lang,
+        message, accountId: session?.defaultAccountId, action, lang, provider,
         imageBase64: img?.b64, imageMime: img?.mime, history,
       });
       const ans = r.answer || r.error || "Sorry, I couldn't get an answer.";
@@ -185,21 +207,105 @@ export function AiAdvisor() {
                 <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-aurora-violet to-aurora-cyan text-white">✦</span>
                 <div className="min-w-0">
                   <div className="text-sm font-bold text-ink-100">AI Investment Advisor</div>
-                  <div className="text-[10px] text-ink-500">Grounded in your live portfolio &amp; market data</div>
+                  <div className="text-[10px] text-ink-500">
+                    {liveMode ? "Live voice — speak naturally, interrupt any time"
+                              : "Grounded in your live portfolio & market data"}
+                  </div>
                 </div>
+
                 <div className="ml-auto flex items-center gap-1">
+                  {/* Which brain answers. Both get the same live OMS context; they differ in voice
+                      and in how they reason, so it is worth being able to ask the same thing twice. */}
+                  {providers?.openai && !liveMode && (
+                    <div className="mr-1 flex overflow-hidden rounded-lg border border-line/[0.12]">
+                      {(["gemini", "openai"] as const).map((p) => (
+                        <button key={p} onClick={() => setProvider(p)}
+                          title={p === "gemini" ? `Google ${providers.geminiModel}` : `OpenAI ${providers.openaiModel}`}
+                          className={`px-2 py-1 text-[10px] font-bold transition-colors ${
+                            provider === p ? "bg-gradient-to-r from-aurora-violet to-aurora-indigo text-white"
+                                           : "text-ink-400 hover:text-ink-100"}`}>
+                          {p === "gemini" ? "Gemini" : "ChatGPT"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Live speech-to-speech. Not a microphone — a conversation. */}
+                  {providers?.liveVoice && (
+                    <button onClick={liveMode ? stopLive : startLive}
+                      title={liveMode ? "End the live voice call" : "Live voice — talk to the OMS like a person (ChatGPT Realtime)"}
+                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition-all ${
+                        liveMode ? "bg-bear text-white hover:brightness-110"
+                                 : "bg-gradient-to-r from-bull to-aurora-cyan text-white hover:brightness-110"}`}>
+                      {liveMode ? <>■ End</> : <>🎙 Live</>}
+                    </button>
+                  )}
+
                   <button onClick={() => setLang((l) => (l === "en" ? "bn" : "en"))} title="Language for answers & voice (English / বাংলা)"
                     className="ghost-btn px-2 py-1 text-[11px]">{lang === "en" ? "EN" : "বাং"}</button>
-                  <button onClick={() => { stopSpeaking(); setHdVoice((v) => !v); }}
-                    title={hdVoice ? "Voice: HD (Gemini, realistic). Tap for instant voice." : "Voice: Fast (instant). Tap for realistic HD voice."}
-                    className={`ghost-btn px-2 py-1 text-[10px] font-bold ${hdVoice ? "text-aurora-cyan" : "text-ink-400"}`}>{hdVoice ? "HD🔊" : "FAST"}</button>
+                  {!liveMode && (
+                    <button onClick={() => { stopSpeaking(); setHdVoice((v) => !v); }}
+                      title={hdVoice ? "Voice: HD (Gemini, realistic). Tap for instant voice." : "Voice: Fast (instant). Tap for realistic HD voice."}
+                      className={`ghost-btn px-2 py-1 text-[10px] font-bold ${hdVoice ? "text-aurora-cyan" : "text-ink-400"}`}>{hdVoice ? "HD🔊" : "FAST"}</button>
+                  )}
                   <button onClick={closeDrawer} className="ghost-btn px-2 py-1">✕</button>
                 </div>
               </div>
 
+              {/* Live-voice status strip — the dealer must be able to see that it is listening. */}
+              {liveMode && (
+                <div className="flex items-center gap-2 border-b border-line/[0.1] bg-surface/[0.04] px-4 py-2">
+                  <span className={`h-2 w-2 rounded-full ${
+                    voice.state === "live" ? (voice.listening ? "bg-bull animate-pulseDot"
+                                            : voice.speaking ? "bg-aurora-cyan animate-pulseDot" : "bg-bull")
+                    : voice.state === "connecting" ? "bg-amber-400 animate-pulseDot" : "bg-bear"}`} />
+                  <span className="text-[11.5px] text-ink-300">
+                    {voice.state === "connecting" && "Connecting… allow the microphone when Chrome asks."}
+                    {voice.state === "live" && (voice.listening ? "Listening…"
+                      : voice.speaking ? "Speaking — just talk over it to interrupt"
+                      : "Go ahead, I'm listening")}
+                    {voice.state === "error" && (voice.error || "The voice session failed")}
+                    {voice.state === "idle" && "Starting…"}
+                  </span>
+                  <span className="ml-auto text-[10px] text-ink-600">
+                    {providers?.realtimeModel} · billed per second of audio
+                  </span>
+                </div>
+              )}
+
               {/* messages */}
               <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4">
-                {msgs.length === 0 && (
+                {/* Live-voice transcript. It is a conversation, so it replaces the text thread while
+                    the call is up rather than interleaving with it. */}
+                {liveMode && (
+                  <>
+                    {voice.turns.length === 0 && voice.state === "live" && (
+                      <div className="rounded-2xl border border-bull/25 bg-bull/[0.06] p-3 text-[13px] text-ink-300">
+                        🎙 <b>You're live.</b> Just talk — ask "how is my portfolio doing today?", "what's
+                        BRAC Bank trading at?", or "should I be worried about the market?". It knows your
+                        holdings and today's prices, and it can look up a fresh quote mid-sentence.
+                        Interrupt it whenever you like.
+                        {lang === "bn" && <div className="mt-1 text-[12px]">বাংলায় কথা বলুন — এটি বাংলায় উত্তর দেবে।</div>}
+                      </div>
+                    )}
+                    {voice.turns.map((t, i) => (
+                      <div key={i} className={`flex ${t.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${
+                          t.role === "user" ? "bg-gradient-to-r from-aurora-violet to-aurora-indigo text-white"
+                                            : "border border-line/[0.08] bg-surface/[0.05] text-ink-200"}`}>
+                          {t.text}{t.partial && <span className="ml-0.5 animate-pulse text-aurora-cyan">▍</span>}
+                        </div>
+                      </div>
+                    ))}
+                    {voice.error && (
+                      <div className="rounded-xl border border-bear/30 bg-bear/10 px-3 py-2 text-[12px] text-bear">
+                        {voice.error}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!liveMode && msgs.length === 0 && (
                   <div className="rounded-2xl border border-line/[0.08] bg-surface/[0.04] p-3 text-[13px] text-ink-300">
                     👋 Ask me about any DSE/CSE stock, your portfolio &amp; P&amp;L, sectors, share categories, or order types —
                     by text or 🎤 voice (English/বাংলা). You can also upload a trading screenshot or tap <b>DSE Status</b>.
@@ -207,7 +313,7 @@ export function AiAdvisor() {
                     <div className="mt-1 text-[11px] text-ink-500">Informational only — not licensed financial advice.</div>
                   </div>
                 )}
-                {msgs.map((m, i) => (
+                {!liveMode && msgs.map((m, i) => (
                   <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${
                       m.role === "user" ? "bg-gradient-to-r from-aurora-violet to-aurora-indigo text-white"
@@ -245,32 +351,49 @@ export function AiAdvisor() {
 
               {/* actions + input */}
               <div className="border-t border-line/[0.1] p-3">
-                <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
-                  {SUGGESTIONS.map((s) => (
-                    <button key={s} onClick={() => send(s)}
-                      className="chip shrink-0 whitespace-nowrap border border-line/[0.1] bg-surface/[0.05] text-ink-300 hover:bg-surface/[0.1]">{s}</button>
-                  ))}
-                </div>
-                <div className="mb-2 flex items-center gap-2">
-                  <button onClick={() => send(undefined, "DSE_STATUS")} className="aurora-btn px-3 py-1.5 text-xs">📊 DSE Status</button>
-                  <button onClick={() => fileRef.current?.click()} className="ghost-btn px-3 py-1.5 text-xs">🖼️ Screenshot</button>
-                  <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
-                  {speaking && (
-                    <button onClick={stopSpeaking}
-                      className="ml-auto flex items-center gap-1.5 rounded-xl bg-bear/20 px-3 py-1.5 text-xs font-semibold text-bear animate-pulseDot hover:bg-bear/30">
-                      <span className="text-[10px]">⏹</span> Stop voice
-                    </button>
-                  )}
-                </div>
+                {!liveMode && (
+                  <>
+                    <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+                      {SUGGESTIONS.map((s) => (
+                        <button key={s} onClick={() => send(s)}
+                          className="chip shrink-0 whitespace-nowrap border border-line/[0.1] bg-surface/[0.05] text-ink-300 hover:bg-surface/[0.1]">{s}</button>
+                      ))}
+                    </div>
+                    <div className="mb-2 flex items-center gap-2">
+                      <button onClick={() => send(undefined, "DSE_STATUS")} className="aurora-btn px-3 py-1.5 text-xs">📊 DSE Status</button>
+                      <button onClick={() => fileRef.current?.click()} className="ghost-btn px-3 py-1.5 text-xs">🖼️ Screenshot</button>
+                      <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+                      {speaking && (
+                        <button onClick={stopSpeaking}
+                          className="ml-auto flex items-center gap-1.5 rounded-xl bg-bear/20 px-3 py-1.5 text-xs font-semibold text-bear animate-pulseDot hover:bg-bear/30">
+                          <span className="text-[10px]">⏹</span> Stop voice
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
                 <div className="flex items-end gap-2">
                   <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        // In a live call, typing joins the SAME conversation — so the model keeps its
+                        // memory of what has been said aloud instead of starting a fresh thread.
+                        if (liveMode) { voice.sendText(input); setInput(""); } else { send(); }
+                      }
+                    }}
                     onPaste={onPasteImage}
-                    placeholder={lang === "bn" ? "প্রশ্ন লিখুন, 🎤 চাপুন বা স্ক্রিনশট পেস্ট (Ctrl+V) করুন…" : "Ask anything, tap 🎤, or paste a screenshot (Ctrl+V)…"}
+                    placeholder={liveMode
+                      ? (lang === "bn" ? "কথা বলুন — অথবা এখানে টাইপ করুন…" : "Just talk — or type here to say it silently…")
+                      : (lang === "bn" ? "প্রশ্ন লিখুন, 🎤 চাপুন বা স্ক্রিনশট পেস্ট (Ctrl+V) করুন…" : "Ask anything, tap 🎤, or paste a screenshot (Ctrl+V)…")}
                     className="field max-h-28 flex-1 resize-none py-2" />
-                  <button onClick={toggleMic} title="Voice input"
-                    className={`grid h-10 w-10 place-items-center rounded-xl border border-line/[0.12] ${listening ? "bg-bear/20 text-bear animate-pulseDot" : "bg-surface/[0.05] text-ink-300 hover:bg-surface/[0.1]"}`}>🎤</button>
-                  <button onClick={() => send()} disabled={busy} className="aurora-btn h-10 w-10 p-0">→</button>
+                  {!liveMode && (
+                    <button onClick={toggleMic} title="Voice input (transcribe, then answer)"
+                      className={`grid h-10 w-10 place-items-center rounded-xl border border-line/[0.12] ${listening ? "bg-bear/20 text-bear animate-pulseDot" : "bg-surface/[0.05] text-ink-300 hover:bg-surface/[0.1]"}`}>🎤</button>
+                  )}
+                  <button
+                    onClick={() => { if (liveMode) { voice.sendText(input); setInput(""); } else { send(); } }}
+                    disabled={busy} className="aurora-btn h-10 w-10 p-0">→</button>
                 </div>
               </div>
             </motion.div>

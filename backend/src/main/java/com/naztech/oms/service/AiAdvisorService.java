@@ -49,13 +49,37 @@ public class AiAdvisorService {
     @Value("${app.ai.gemini.model:gemini-2.5-flash}") private String geminiModel;
 
     private final SecuritySearchService search;
+    private final OpenAiService openai;
 
     public AiAdvisorService(PortfolioService portfolio, SecurityRepo securityRepo, MarketDataRepo marketRepo,
-                            SecuritySearchService search) {
+                            SecuritySearchService search, OpenAiService openai) {
         this.portfolio = portfolio;
         this.securityRepo = securityRepo;
         this.marketRepo = marketRepo;
         this.search = search;
+        this.openai = openai;
+    }
+
+    /** The system prompt, shared by every provider — and by the live-voice session. */
+    public String systemPrompt() {
+        return SYSTEM;
+    }
+
+    /** The live OMS picture: indices, breadth, movers, sectors, the instrument table, the portfolio. */
+    public String liveContext(Long accountId) {
+        return buildContext(accountId);
+    }
+
+    /** Which providers are actually usable right now — the UI only offers what is configured. */
+    public Map<String, Object> providers() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("gemini", geminiKey != null && !geminiKey.isBlank());
+        m.put("geminiModel", geminiModel);
+        m.put("openai", openai.enabled());
+        m.put("openaiModel", openai.model());
+        m.put("realtimeModel", openai.realtimeModel());
+        m.put("liveVoice", openai.enabled());   // speech-to-speech is OpenAI-only today
+        return m;
     }
 
     /** {@code route} is set when the answer is "it is on this screen" — the UI turns it into a link. */
@@ -67,6 +91,16 @@ public class AiAdvisorService {
 
     public Reply advise(String message, Long accountId, String action,
                         String imageBase64, String imageMime, List<Map<String, String>> history, String lang) {
+        return advise(message, accountId, action, imageBase64, imageMime, history, lang, null);
+    }
+
+    /**
+     * @param provider {@code "openai"} or {@code "gemini"}; null/blank picks whichever is configured,
+     *                 preferring Gemini (it is the incumbent, and it handles the screenshot path).
+     */
+    public Reply advise(String message, Long accountId, String action,
+                        String imageBase64, String imageMime, List<Map<String, String>> history, String lang,
+                        String provider) {
         boolean dseStatus = "DSE_STATUS".equalsIgnoreCase(action);
         String userMsg = dseStatus
                 ? "Give me a concise current DSE market status summary: index direction, market breadth, "
@@ -88,13 +122,39 @@ public class AiAdvisorService {
         }
 
         String context = buildContext(accountId);
+        boolean wantsOpenAi = "openai".equalsIgnoreCase(provider) || "chatgpt".equalsIgnoreCase(provider);
+        boolean hasGemini = geminiKey != null && !geminiKey.isBlank();
 
-        if (geminiKey != null && !geminiKey.isBlank()) {
+        // ChatGPT, when asked for. It has no vision path here, so a screenshot still goes to Gemini —
+        // silently dropping the image the dealer just pasted would be worse than ignoring the toggle.
+        if (wantsOpenAi && openai.enabled() && (imageBase64 == null || imageBase64.isBlank())) {
+            String prompt = "LIVE OMS DATA (use only this for facts):\n" + context
+                    + "\n\n----\nINVESTOR QUESTION: " + userMsg
+                    + (langDirective.isBlank() ? "" : "\n\n" + langDirective);
+            String ans = openai.complete(SYSTEM, prompt, 0.4, 1536);
+            if (ans != null && !ans.isBlank()) {
+                return new Reply(ans, "openai:" + openai.model(), true);
+            }
+            log.warn("OpenAI returned nothing — falling back");
+        }
+
+        if (hasGemini) {
             try {
                 String ans = callGemini(userMsg, context, imageBase64, imageMime, history, langDirective);
                 if (ans != null && !ans.isBlank()) return new Reply(ans, "gemini:" + geminiModel, true);
             } catch (Exception e) {
                 log.warn("Gemini call failed, using fallback: {}", e.getMessage());
+            }
+        }
+
+        // Gemini absent or failed, and the caller did not ask for OpenAI: try it anyway rather than
+        // dropping to the regex fallback while a perfectly good provider sits configured and idle.
+        if (!wantsOpenAi && openai.enabled() && (imageBase64 == null || imageBase64.isBlank())) {
+            String ans = openai.complete(SYSTEM,
+                    "LIVE OMS DATA (use only this for facts):\n" + context + "\n\n----\nINVESTOR QUESTION: " + userMsg,
+                    0.4, 1536);
+            if (ans != null && !ans.isBlank()) {
+                return new Reply(ans, "openai:" + openai.model(), true);
             }
         }
         return new Reply(fallback(userMsg, accountId, imageBase64 != null), "rule-based (offline)", false);
