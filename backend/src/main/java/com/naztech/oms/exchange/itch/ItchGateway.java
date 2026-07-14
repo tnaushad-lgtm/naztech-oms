@@ -340,14 +340,49 @@ public class ItchGateway implements MarketDataGateway {
         stream.publish("trade", tick);
     }
 
-    /** Nudge index values so the index board stays alive under the ITCH feed. */
+    /**
+     * Nudge index values so the index board stays alive under the ITCH feed.
+     *
+     * <p><b>This used to be an unbounded upward ratchet.</b> The step was
+     * {@code (nextDouble() - 0.48) * 0.0015}, and {@code nextDouble()} averages 0.5 — so the mean step
+     * was <em>positive</em>, about +0.003% per tick. A tick every 1.2 seconds compounds that to roughly
+     * +9% an hour, and the result was written straight back to MySQL, which is the part that made it
+     * fatal: nothing reset it, so each run resumed from the inflated number and pushed on. Left open
+     * over a few days, DSEX had climbed from ~5,200 to <b>52 million</b>, and the AI advisor — quite
+     * correctly — read that figure out to the dealer.
+     *
+     * <p>Two things fix it, and both are what a real index actually does:
+     * <ul>
+     *   <li>the step is <b>centred</b> ({@code nextDouble() - 0.5}), so it is a walk and not a climb;</li>
+     *   <li>it is <b>anchored to yesterday's close</b> — pulled gently back toward YCP and hard-clamped
+     *       to ±10% of it. A real index does not wander 8× away from where it opened, and an anchor is
+     *       the only thing that stops a random walk from eventually doing exactly that.</li>
+     * </ul>
+     */
     private void driftIndices() {
         boolean any = false;
         for (Long id : indexIds) {
             MarketData m = marketRepo.findById(id).orElse(null);
             if (m == null || m.getLtp() == null || m.getLtp().signum() == 0) continue;
-            double drift = (rnd.nextDouble() - 0.48) * 0.0015;
-            BigDecimal v = m.getLtp().multiply(BigDecimal.valueOf(1 + drift)).setScale(2, RoundingMode.HALF_UP);
+
+            BigDecimal ltp = m.getLtp();
+            BigDecimal anchor = m.getYcp() != null && m.getYcp().signum() > 0 ? m.getYcp() : ltp;
+
+            // A centred step, plus a light pull back toward the anchor. The pull is what makes this a
+            // market that oscillates rather than one that escapes.
+            double step = (rnd.nextDouble() - 0.5) * 0.0015;
+            double gap = anchor.subtract(ltp).doubleValue() / anchor.doubleValue();   // >0 when below YCP
+            double pull = gap * 0.02;
+
+            BigDecimal v = ltp.multiply(BigDecimal.valueOf(1 + step + pull)).setScale(2, RoundingMode.HALF_UP);
+
+            // And a hard band, because a slow leak over a long-running session is exactly how the last
+            // one got away: a bound that is never tested is a bound that is not there.
+            BigDecimal floor = anchor.multiply(BigDecimal.valueOf(0.90));
+            BigDecimal ceil = anchor.multiply(BigDecimal.valueOf(1.10));
+            if (v.compareTo(floor) < 0) v = floor;
+            if (v.compareTo(ceil) > 0) v = ceil;
+
             marketData.applyIndex(id, v);
             any = true;
         }
