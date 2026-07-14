@@ -230,14 +230,18 @@ export function AiAdvisor() {
                     </div>
                   )}
 
-                  {/* Live speech-to-speech. Not a microphone — a conversation. */}
+                  {/* Live speech-to-speech. Not a microphone — a conversation. It is the headline
+                      feature of this panel, so it is sized and animated like one: the first version was
+                      a small chip next to two other small chips, and it was simply not seen. */}
                   {providers?.liveVoice && (
                     <button onClick={liveMode ? stopLive : startLive}
-                      title={liveMode ? "End the live voice call" : "Live voice — talk to the OMS like a person (ChatGPT Realtime)"}
-                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition-all ${
-                        liveMode ? "bg-bear text-white hover:brightness-110"
-                                 : "bg-gradient-to-r from-bull to-aurora-cyan text-white hover:brightness-110"}`}>
-                      {liveMode ? <>■ End</> : <>🎙 Live</>}
+                      title={liveMode ? "End the live voice call" : "Talk to the OMS out loud — real conversation, interrupt any time (ChatGPT Realtime)"}
+                      className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[11.5px] font-bold text-white shadow-glow transition-all hover:brightness-110 active:scale-95 ${
+                        liveMode ? "bg-bear"
+                                 : "bg-gradient-to-r from-bull to-aurora-cyan animate-pulseDot"}`}>
+                      {liveMode
+                        ? <>■ End call</>
+                        : <><span className="text-[13px]">🎙</span> Talk to me</>}
                     </button>
                   )}
 
@@ -306,12 +310,32 @@ export function AiAdvisor() {
                 )}
 
                 {!liveMode && msgs.length === 0 && (
-                  <div className="rounded-2xl border border-line/[0.08] bg-surface/[0.04] p-3 text-[13px] text-ink-300">
-                    👋 Ask me about any DSE/CSE stock, your portfolio &amp; P&amp;L, sectors, share categories, or order types —
-                    by text or 🎤 voice (English/বাংলা). You can also upload a trading screenshot or tap <b>DSE Status</b>.
-                    Use the suggestion chips below the input anytime.
-                    <div className="mt-1 text-[11px] text-ink-500">Informational only — not licensed financial advice.</div>
-                  </div>
+                  <>
+                    {/* The live-voice call to action. A feature nobody can find is a feature nobody has. */}
+                    {providers?.liveVoice && (
+                      <button onClick={startLive}
+                        className="group flex w-full items-center gap-3 rounded-2xl border border-bull/30 bg-gradient-to-r from-bull/[0.10] to-aurora-cyan/[0.08] p-3 text-left transition-all hover:border-bull/60 hover:from-bull/[0.16]">
+                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-bull to-aurora-cyan text-xl text-white shadow-glow">🎙</span>
+                        <span className="min-w-0">
+                          <span className="block text-[13.5px] font-bold text-ink-100">
+                            Talk to me out loud
+                            <span className="ml-1.5 rounded bg-bull/20 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-bull">Live</span>
+                          </span>
+                          <span className="block text-[11.5px] leading-snug text-ink-400">
+                            A real conversation — it hears you, answers in a human voice, and you can cut it
+                            off mid-sentence. It knows your holdings and today's prices.
+                            {lang === "bn" && " বাংলাতেও কথা বলতে পারবেন।"}
+                          </span>
+                        </span>
+                        <span className="ml-auto shrink-0 text-ink-500 transition-transform group-hover:translate-x-0.5">→</span>
+                      </button>
+                    )}
+                    <div className="rounded-2xl border border-line/[0.08] bg-surface/[0.04] p-3 text-[13px] text-ink-300">
+                      👋 …or ask me by text about any DSE/CSE stock, your portfolio &amp; P&amp;L, sectors, share categories,
+                      or order types (English/বাংলা). You can upload a trading screenshot or tap <b>DSE Status</b>.
+                      <div className="mt-1 text-[11px] text-ink-500">Informational only — not licensed financial advice.</div>
+                    </div>
+                  </>
                 )}
                 {!liveMode && msgs.map((m, i) => (
                   <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
