@@ -153,6 +153,10 @@ public class AiAdvisorService {
         m.put("openaiModel", openai.model());
         m.put("realtimeModel", openai.realtimeModel());
         m.put("liveVoice", openai.enabled());   // speech-to-speech is OpenAI-only today
+        // The ten the API actually accepts. The ChatGPT app's voices (Maple, Breeze, Cove…) are not
+        // among them — ask for one and OpenAI rejects the whole session.
+        m.put("voices", openai.voices());
+        m.put("voice", openai.defaultVoice());
         return m;
     }
 

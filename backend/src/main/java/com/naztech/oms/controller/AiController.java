@@ -69,12 +69,14 @@ public class AiController {
     public ResponseEntity<?> realtimeSession(@RequestBody(required = false) Map<String, Object> req) {
         Long accountId = null;
         String lang = "en";
+        String voice = null;
         if (req != null) {
             Object a = req.get("accountId");
             if (a instanceof Number n) accountId = n.longValue();
             if (req.get("lang") != null) lang = String.valueOf(req.get("lang"));
+            if (req.get("voice") != null) voice = String.valueOf(req.get("voice"));
         }
-        var session = realtime.open(accountId, lang);
+        var session = realtime.open(accountId, lang, voice);
         if (session == null) {
             return ResponseEntity.status(503).body(Map.of("error",
                     "Live voice is not configured — set app.ai.openai.key in secrets.properties and restart."));

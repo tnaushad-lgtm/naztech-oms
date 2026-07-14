@@ -174,10 +174,36 @@ public class OpenAiService {
      * @return the ephemeral token, or {@code null} if no key is configured or OpenAI refused
      */
     @SuppressWarnings("unchecked")
+    /**
+     * The voices the Realtime API will actually accept — verified against the API, not assumed.
+     *
+     * <p>Worth stating because it trips people up: the voices in the ChatGPT <em>app</em> (Maple, Breeze,
+     * Cove, Juniper…) are <b>not</b> available here. Ask for "maple" and the session is rejected outright.
+     * These ten are what the API has.
+     */
+    public static final List<String> VOICES =
+            List.of("marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse");
+
+    public List<String> voices() {
+        return VOICES;
+    }
+
+    public String defaultVoice() {
+        return voice;
+    }
+
     public RealtimeSession realtimeSession(String instructions, List<Map<String, Object>> tools) {
+        return realtimeSession(instructions, tools, null);
+    }
+
+    public RealtimeSession realtimeSession(String instructions, List<Map<String, Object>> tools, String wantVoice) {
         if (!enabled()) {
             return null;
         }
+        // An unknown voice is not a small mistake — OpenAI refuses the whole session and the dealer just
+        // sees "could not start". Fall back to the configured default rather than failing the call.
+        String useVoice = wantVoice != null && VOICES.contains(wantVoice.toLowerCase())
+                ? wantVoice.toLowerCase() : voice;
         try {
             Map<String, Object> session = new LinkedHashMap<>();
             session.put("type", "realtime");
@@ -203,7 +229,7 @@ public class OpenAiService {
                                     "silence_duration_ms", 500,
                                     "create_response", true,
                                     "interrupt_response", true)),
-                    "output", Map.of("voice", voice)));
+                    "output", Map.of("voice", useVoice)));
             if (tools != null && !tools.isEmpty()) {
                 session.put("tools", tools);
                 session.put("tool_choice", "auto");
@@ -221,8 +247,8 @@ public class OpenAiService {
                 return null;
             }
             long expiresAt = resp.get("expires_at") instanceof Number n ? n.longValue() : 0L;
-            log.info("Realtime voice session minted ({}), expires at {}", realtimeModel, expiresAt);
-            return new RealtimeSession(String.valueOf(resp.get("value")), expiresAt, realtimeModel, voice);
+            log.info("Realtime voice session minted ({}, voice={}), expires at {}", realtimeModel, useVoice, expiresAt);
+            return new RealtimeSession(String.valueOf(resp.get("value")), expiresAt, realtimeModel, useVoice);
         } catch (Exception e) {
             log.warn("Could not mint an OpenAI realtime session: {}", e.toString());
             return null;

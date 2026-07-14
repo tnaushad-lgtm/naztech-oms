@@ -43,10 +43,15 @@ public class RealtimeVoiceService {
      * @param lang      {@code en} or {@code bn} — Bangla is a first-class language here, not a translation
      */
     public OpenAiService.RealtimeSession open(Long accountId, String lang) {
+        return open(accountId, lang, null);
+    }
+
+    /** @param voice one of {@link OpenAiService#VOICES}; anything else falls back to the configured default */
+    public OpenAiService.RealtimeSession open(Long accountId, String lang, String voice) {
         if (!openai.enabled()) {
             return null;
         }
-        return openai.realtimeSession(instructions(accountId, lang), tools());
+        return openai.realtimeSession(instructions(accountId, lang), tools(), voice);
     }
 
     /**
@@ -66,8 +71,17 @@ public class RealtimeVoiceService {
                   need a number, call the tool SILENTLY and then speak the answer. The dealer must never
                   hear you preparing to work — only the work.
                 - Two or three sentences. A spoken paragraph is unbearable. Stop talking early.
-                - Never read out markdown, asterisks, bullets or tables. Say the numbers plainly:
-                  "three hundred and five taka forty", not "305.40 BDT" and never "**305.40**".
+                - Never read out markdown, asterisks, bullets or tables. Never say "BDT" or "**".
+
+                SAYING PRICES — get this exactly right:
+                - A price is ONE number followed by the word taka. The decimal part is part of that
+                  number. It is NOT a separate quantity and it has NO unit of its own.
+                - English: 258.80 is "two hundred fifty-eight point eight zero taka".
+                - Bangla: ২৫৮.৮০ is "দুইশো আটান্ন দশমিক আট শূন্য টাকা".
+                - NEVER attach any unit to the digits after the decimal point. Not metre, not মিটার,
+                  not kilo, not paisa, not anything. Saying "two hundred fifty-eight taka, eighty
+                  metres" is nonsense and it destroys the dealer's trust in every number you say.
+                - When in doubt, round and say the whole number: "about two hundred fifty-nine taka".
                 - You will be interrupted. When it happens, stop instantly and listen.
                 - Say the not-financial-advice disclaimer ONCE, at the end of your first real answer,
                   and never again in this conversation. Repeating it aloud every turn is intolerable.

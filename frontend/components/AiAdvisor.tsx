@@ -66,6 +66,10 @@ export function AiAdvisor() {
   // The drawer stays open, because the dealer is mid-conversation — closing it would hang up on them.
   const voice = useRealtimeVoice((route) => router.push(route));
   const [liveMode, setLiveMode] = useState(false);
+  // Remembered, because a dealer who has found a voice they can listen to all day should not have to
+  // find it again tomorrow.
+  const [voiceName, setVoiceName] = useState<string>(
+    () => (typeof window !== "undefined" && localStorage.getItem("oms.voice")) || "marin");
 
   useEffect(() => {
     get<any>("/api/ai/providers").then(setProviders).catch(() => {});
@@ -78,9 +82,19 @@ export function AiAdvisor() {
     stopSpeaking();
     if (listening) recRef.current?.stop();
     setLiveMode(true);
-    await voice.start(session?.defaultAccountId, lang);
+    await voice.start(session?.defaultAccountId, lang, voiceName);
   };
   const stopLive = () => { voice.stop(); setLiveMode(false); };
+
+  /** Switching voice means a new session — the voice is fixed when the call is placed. */
+  const pickVoice = async (v: string) => {
+    setVoiceName(v);
+    localStorage.setItem("oms.voice", v);
+    if (liveMode) {
+      voice.stop();
+      await voice.start(session?.defaultAccountId, lang, v);
+    }
+  };
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audiosRef = useRef<HTMLAudioElement[]>([]);
@@ -289,8 +303,23 @@ export function AiAdvisor() {
                       </span>
                     )}
 
-                    <span className="ml-auto shrink-0 text-[10px] text-ink-600">
-                      {providers?.realtimeModel} · billed per second of audio
+                    {/* Pick a voice. These ten are what the Realtime API accepts — the ChatGPT app's
+                        voices (Maple, Breeze, Cove) are not among them, and asking for one gets the
+                        whole session rejected. Changing it re-places the call: the voice is fixed at
+                        the moment the session is minted. */}
+                    <label className="ml-auto flex shrink-0 items-center gap-1">
+                      <span className="text-[10px] text-ink-600">voice</span>
+                      <select value={voiceName} onChange={(e) => pickVoice(e.target.value)}
+                        title="Change the voice — this restarts the call"
+                        className="rounded-md border border-line/[0.12] bg-surface/[0.06] px-1.5 py-0.5 text-[10.5px] text-ink-200 outline-none">
+                        {(providers?.voices || ["marin"]).map((v: string) => (
+                          <option key={v} value={v} className="bg-obsidian-850">{v}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <span className="shrink-0 text-[10px] text-ink-600">
+                      {providers?.realtimeModel}
                     </span>
                   </div>
 
@@ -363,6 +392,21 @@ export function AiAdvisor() {
                         </span>
                         <span className="ml-auto shrink-0 text-ink-500 transition-transform group-hover:translate-x-0.5">→</span>
                       </button>
+                    )}
+                    {providers?.liveVoice && (
+                      <div className="flex items-center gap-2 px-1 text-[11px] text-ink-500">
+                        <span>Voice:</span>
+                        <select value={voiceName}
+                          onChange={(e) => { e.stopPropagation(); pickVoice(e.target.value); }}
+                          className="rounded-md border border-line/[0.12] bg-surface/[0.06] px-2 py-0.5 text-[11px] text-ink-200 outline-none">
+                          {(providers.voices || []).map((v: string) => (
+                            <option key={v} value={v} className="bg-obsidian-850">{v}</option>
+                          ))}
+                        </select>
+                        <span className="text-ink-600">
+                          10 voices — try <b className="text-ink-400">cedar</b> or <b className="text-ink-400">marin</b> first
+                        </span>
+                      </div>
                     )}
                     <div className="rounded-2xl border border-line/[0.08] bg-surface/[0.04] p-3 text-[13px] text-ink-300">
                       👋 …or ask me by text about any DSE/CSE stock, your portfolio &amp; P&amp;L, sectors, share categories,

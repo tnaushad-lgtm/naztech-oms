@@ -178,7 +178,7 @@ export function useRealtimeVoice(onNavigate?: (route: string) => void) {
     tick();
   };
 
-  const start = useCallback(async (accountId?: number, lang: "en" | "bn" = "en") => {
+  const start = useCallback(async (accountId?: number, lang: "en" | "bn" = "en", voiceName?: string) => {
     if (pcRef.current) return;
     setState("connecting");
     setError("");
@@ -187,7 +187,7 @@ export function useRealtimeVoice(onNavigate?: (route: string) => void) {
     try {
       // 1. Our backend mints a short-lived token. The real API key stays on the server.
       const s = await post<{ token: string; model: string; voice: string }>(
-        "/api/ai/realtime/session", { accountId, lang });
+        "/api/ai/realtime/session", { accountId, lang, voice: voiceName });
 
       // 2. A plain WebRTC peer connection, straight to OpenAI.
       const pc = new RTCPeerConnection();
