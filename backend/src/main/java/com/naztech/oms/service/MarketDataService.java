@@ -171,6 +171,40 @@ public class MarketDataService {
         return out;
     }
 
+    /**
+     * One instrument, everything the AI needs to say something specific about it — in one indexed read.
+     *
+     * <p>Deliberately richer than a bare price. An assistant that can only say "it is 258.60" produces
+     * exactly the mush the voice agent was producing: "the market is broadly positive, holding up
+     * reasonably well." Give it the day's range, the previous close, the volume and the category, and
+     * it can say something a dealer could act on — which is the entire difference between an assistant
+     * and a talking clock.
+     */
+    public Map<String, Object> quote(Security s) {
+        MarketData m = marketRepo.findById(s.getId()).orElse(null);
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("symbol", s.getSymbol());
+        q.put("name", s.getName());
+        q.put("sector", s.getSector());
+        q.put("category", s.getCategory());
+        q.put("shariah", Boolean.TRUE.equals(s.getShariah()));
+        q.put("assetClass", s.getAssetClass());
+        q.put("currency", "BDT");
+        if (m != null) {
+            q.put("price", nz(m.getLtp()));
+            q.put("previousClose", nz(m.getYcp()));
+            q.put("changePct", nz(m.getChangePct()));
+            q.put("dayHigh", nz(m.getHighPrice()));
+            q.put("dayLow", nz(m.getLowPrice()));
+            q.put("open", nz(m.getOpenPrice()));
+            q.put("volume", m.getVolume() == null ? 0 : m.getVolume());
+            q.put("trades", m.getTrades() == null ? 0 : m.getTrades());
+            q.put("bid", nz(m.getBid()));
+            q.put("ask", nz(m.getAsk()));
+        }
+        return q;
+    }
+
     public List<MarketRow> indices() {
         List<MarketRow> all = new ArrayList<>();
         all.addAll(watch("DSE", true));

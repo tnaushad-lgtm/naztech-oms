@@ -8,6 +8,7 @@ import com.naztech.oms.repo.TradeRepo;
 import com.naztech.oms.service.DepthBroadcaster;
 import com.naztech.oms.service.MarketDataGateway;
 import com.naztech.oms.service.MarketDataService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -46,6 +47,26 @@ public class MarketDataController {
 
     @GetMapping("/indices")
     public List<MarketRow> indices() { return market.indices(); }
+
+    /**
+     * One instrument's live price, by ticker.
+     *
+     * <p>This exists because the AI voice assistant was answering "what is Grameenphone trading at?" by
+     * downloading the <em>entire</em> 402-instrument board — 128 KB — and scanning it for one row. On a
+     * written page nobody notices. In a spoken conversation that pause is the whole experience: the
+     * model, left with dead air, fills it — <em>"give me a moment, I'll check and tell you"</em> — and a
+     * dealer who has to wait to be told a price they can already see is a dealer who stops asking.
+     */
+    @GetMapping("/quote")
+    public ResponseEntity<?> quote(@RequestParam String symbol) {
+        Security s = securityRepo.findFirstBySymbolIgnoreCase(symbol == null ? "" : symbol.trim())
+                .orElse(null);
+        if (s == null) {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "No instrument with the ticker '" + symbol + "' is listed on the DSE or CSE."));
+        }
+        return ResponseEntity.ok(market.quote(s));
+    }
 
     @GetMapping("/{securityId}/depth")
     public Depth depth(@PathVariable Long securityId,

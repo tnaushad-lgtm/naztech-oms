@@ -69,16 +69,11 @@ export function useRealtimeVoice(onNavigate?: (route: string) => void) {
 
     try {
       switch (name) {
-        case "get_quote": {
-          const rows = await get<any[]>(`/api/market/watch?exchange=DSE`);
-          const want = String(args.symbol || "").toUpperCase();
-          const hit = rows.find((r) => r.symbol?.toUpperCase() === want);
-          if (!hit) return JSON.stringify({ error: `No instrument called ${args.symbol} on the DSE board.` });
-          return JSON.stringify({
-            symbol: hit.symbol, name: hit.name, price: hit.ltp,
-            changePct: hit.changePct, volume: hit.volume, currency: "BDT",
-          });
-        }
+        // One indexed read. This used to pull the whole 402-instrument board — 128 KB — to find one
+        // row, and the model, left holding dead air, filled it: "give me a moment, I'll check."
+        case "get_quote":
+          return JSON.stringify(
+            await get<any>(`/api/market/quote?symbol=${encodeURIComponent(String(args.symbol || ""))}`));
 
         case "find_instruments": {
           const rows = await get<any[]>(`/api/market/watch?exchange=DSE`);
@@ -140,6 +135,7 @@ export function useRealtimeVoice(onNavigate?: (route: string) => void) {
     pcRef.current = null;
     micRef.current = null;
     audioRef.current = null;
+    assistantRef.current = "";
     setState("idle");
     setSpeaking(false);
     setListening(false);
@@ -183,6 +179,11 @@ export function useRealtimeVoice(onNavigate?: (route: string) => void) {
     setState("connecting");
     setError("");
     setTurns([]);
+    // Reset the streaming buffer, not just the visible list. Without this the first transcript delta
+    // of a NEW call appends to whatever the LAST call left half-written — so the dealer logs back in,
+    // starts a fresh conversation, and hears yesterday's answer replayed in front of today's. The turns
+    // were cleared and the buffer behind them was not, which looked exactly like the model remembering.
+    assistantRef.current = "";
 
     try {
       // 1. Our backend mints a short-lived token. The real API key stays on the server.

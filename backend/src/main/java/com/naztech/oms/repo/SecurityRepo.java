@@ -8,6 +8,9 @@ import java.util.Optional;
 
 public interface SecurityRepo extends JpaRepository<Security, Long> {
     Optional<Security> findBySymbolAndExchangeId(String symbol, Long exchangeId);
+
+    /** One instrument by ticker, whichever exchange it is on. Indexed lookup — used on the AI hot path. */
+    Optional<Security> findFirstBySymbolIgnoreCase(String symbol);
     List<Security> findByExchangeId(Long exchangeId);
     List<Security> findByAssetClass(String assetClass);
 }
