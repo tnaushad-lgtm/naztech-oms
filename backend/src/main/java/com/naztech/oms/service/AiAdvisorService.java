@@ -70,6 +70,80 @@ public class AiAdvisorService {
         return buildContext(accountId);
     }
 
+    /**
+     * The same picture, small enough to speak with.
+     *
+     * <p>{@link #buildContext} lists all 402 instruments — roughly ten thousand tokens. For the text
+     * advisor that is exactly right: it can read the table and answer precisely. Handing it to a
+     * <em>realtime voice</em> model was a mistake, and an audible one. The model spent its budget
+     * reading a table instead of talking, hedged, and narrated its own hesitation: "let me look at
+     * Grameenphone's data, then I'll tell you clearly" — a sentence that is not an answer.
+     *
+     * <p>So the voice model gets the shape of the market — indices, breadth, the movers, the sectors,
+     * and this dealer's actual holdings — and <b>tools</b> for anything specific. Which is how a person
+     * works too: you hold the picture in your head and look up the number when asked.
+     */
+    public String voiceContext(Long accountId) {
+        List<Row> rows = marketRows();
+        List<Row> eq = rows.stream().filter(Row::isEq).collect(Collectors.toList());
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("DATE: ").append(java.time.LocalDate.now()).append('\n');
+
+        sb.append("INDICES: ").append(rows.stream()
+                .filter(r -> "INDEX".equals(r.s().getAssetClass()))
+                .map(r -> r.s().getSymbol() + " " + nf(r.ltp()) + " (" + sign(r.chg()) + "%)")
+                .collect(Collectors.joining(", "))).append('\n');
+
+        long up = eq.stream().filter(r -> r.chg().signum() > 0).count();
+        long dn = eq.stream().filter(r -> r.chg().signum() < 0).count();
+        sb.append("BREADTH: ").append(up).append(" up, ").append(dn).append(" down, of ")
+                .append(eq.size()).append(" instruments.\n");
+
+        sb.append("TOP GAINERS: ").append(eq.stream()
+                .sorted(Comparator.comparing(Row::chg).reversed()).limit(5)
+                .map(r -> r.s().getSymbol() + " +" + nf(r.chg()) + "%").collect(Collectors.joining(", "))).append('\n');
+        sb.append("TOP LOSERS: ").append(eq.stream()
+                .sorted(Comparator.comparing(Row::chg)).limit(5)
+                .map(r -> r.s().getSymbol() + " " + nf(r.chg()) + "%").collect(Collectors.joining(", "))).append('\n');
+        sb.append("MOST ACTIVE: ").append(eq.stream()
+                .sorted(Comparator.comparing(Row::valueMn).reversed()).limit(5)
+                .map(r -> r.s().getSymbol()).collect(Collectors.joining(", "))).append('\n');
+
+        Map<String, double[]> sec = new LinkedHashMap<>();
+        for (Row r : eq) {
+            String k = r.s().getSector() == null ? "Other" : r.s().getSector();
+            double[] a = sec.computeIfAbsent(k, x -> new double[2]);
+            a[0] += r.chg().doubleValue();
+            a[1] += 1;
+        }
+        sb.append("SECTORS (best to worst): ").append(sec.entrySet().stream()
+                .map(e -> Map.entry(e.getKey(), e.getValue()[1] == 0 ? 0 : e.getValue()[0] / e.getValue()[1]))
+                .sorted((x, y) -> Double.compare(y.getValue(), x.getValue()))
+                .map(e -> e.getKey() + " " + String.format("%+.2f%%", e.getValue()))
+                .collect(Collectors.joining(", "))).append('\n');
+
+        // The dealer's own book — small, and the thing they are most likely to ask about.
+        if (accountId != null) {
+            try {
+                PortfolioView p = portfolio.portfolio(accountId);
+                if (p != null) {
+                    sb.append("\nTHE DEALER'S PORTFOLIO (").append(p.accountName()).append("): cash ৳")
+                            .append(nf(p.cash())).append(", buying power ৳").append(nf(p.buyingPower()))
+                            .append(", market value ৳").append(nf(p.totalValue()))
+                            .append(", unrealised P&L ৳").append(nf(p.unrealizedPnl())).append('\n');
+                    sb.append("HOLDINGS: ").append(p.positions().stream()
+                            .map(x -> x.symbol() + " " + x.quantity() + " @ ৳" + nf(x.avgCost())
+                                    + " (now ৳" + nf(x.ltp()) + ", " + sign(x.pnlPct()) + "%)")
+                            .collect(Collectors.joining("; "))).append('\n');
+                }
+            } catch (Exception e) {
+                log.debug("voiceContext: no portfolio for {}", accountId);
+            }
+        }
+        return sb.toString();
+    }
+
     /** Which providers are actually usable right now — the UI only offers what is configured. */
     public Map<String, Object> providers() {
         Map<String, Object> m = new LinkedHashMap<>();

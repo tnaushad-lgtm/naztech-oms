@@ -61,7 +61,10 @@ export function AiAdvisor() {
 
   // Live speech-to-speech (ChatGPT Realtime). A separate mode, not a better microphone: the audio
   // goes straight to the model and comes back as speech, and you can cut it off mid-sentence.
-  const voice = useRealtimeVoice();
+  //
+  // It can also drive the app: ask "where is market depth?" and it opens the screen while it answers.
+  // The drawer stays open, because the dealer is mid-conversation — closing it would hang up on them.
+  const voice = useRealtimeVoice((route) => router.push(route));
   const [liveMode, setLiveMode] = useState(false);
 
   useEffect(() => {

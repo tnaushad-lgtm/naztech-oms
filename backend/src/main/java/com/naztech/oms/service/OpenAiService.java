@@ -183,6 +183,14 @@ public class OpenAiService {
             session.put("type", "realtime");
             session.put("model", realtimeModel);
             session.put("instructions", instructions);
+
+            // A voice agent should answer, not deliberate — and this is the setting that decides which.
+            // Left on its default, the model reasons at length before speaking, and because it cannot
+            // hide that silence in a conversation, it fills it: "let me think this through", "let me
+            // look at Grameenphone's data, then I'll tell you clearly." Sentences that promise an
+            // answer and are not one. OpenAI's own guidance says to start voice agents at 'low'.
+            session.put("reasoning", Map.of("effort", "low"));
+
             session.put("audio", Map.of(
                     "input", Map.of(
                             // Server-side voice activity detection: the model decides when the dealer has

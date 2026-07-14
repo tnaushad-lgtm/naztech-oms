@@ -23,7 +23,14 @@ export type VoiceTurn = { role: "user" | "assistant"; text: string; partial?: bo
  * ephemeral token scoped to one session, and only that token reaches the browser — the real key would
  * otherwise sit in the page source of every terminal on the desk.
  */
-export function useRealtimeVoice() {
+/**
+ * @param onNavigate called when the dealer asks to be taken to a screen ("where is market depth?") —
+ *                   the assistant does not just describe it, it opens it.
+ */
+export function useRealtimeVoice(onNavigate?: (route: string) => void) {
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
+
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState<string>("");
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
@@ -52,20 +59,70 @@ export function useRealtimeVoice() {
   const acRef = useRef<AudioContext | null>(null);
   const rafRef = useRef<number>(0);
 
-  /** The model asked for a live price. Answer it from the OMS's own market data, not a second source. */
+  /**
+   * The model reached for a tool. Answer it from the OMS's own data — so what it says out loud is the
+   * same number on the dealer's screen, not a second opinion from somewhere else.
+   */
   const runTool = useCallback(async (name: string, argsJson: string): Promise<string> => {
-    if (name !== "get_quote") return JSON.stringify({ error: `unknown tool ${name}` });
+    let args: any = {};
+    try { args = JSON.parse(argsJson || "{}"); } catch {}
+
     try {
-      const { symbol } = JSON.parse(argsJson || "{}");
-      const rows = await get<any[]>(`/api/market/watch?exchange=DSE`);
-      const hit = rows.find((r) => r.symbol?.toUpperCase() === String(symbol || "").toUpperCase());
-      if (!hit) return JSON.stringify({ error: `No instrument called ${symbol} on the DSE board.` });
-      return JSON.stringify({
-        symbol: hit.symbol, name: hit.name, price: hit.ltp,
-        changePct: hit.changePct, volume: hit.volume, currency: "BDT",
-      });
+      switch (name) {
+        case "get_quote": {
+          const rows = await get<any[]>(`/api/market/watch?exchange=DSE`);
+          const want = String(args.symbol || "").toUpperCase();
+          const hit = rows.find((r) => r.symbol?.toUpperCase() === want);
+          if (!hit) return JSON.stringify({ error: `No instrument called ${args.symbol} on the DSE board.` });
+          return JSON.stringify({
+            symbol: hit.symbol, name: hit.name, price: hit.ltp,
+            changePct: hit.changePct, volume: hit.volume, currency: "BDT",
+          });
+        }
+
+        case "find_instruments": {
+          const rows = await get<any[]>(`/api/market/watch?exchange=DSE`);
+          let list = rows.filter((r) => r.assetClass !== "INDEX");
+          if (args.sector) {
+            const s = String(args.sector).toLowerCase();
+            list = list.filter((r) => r.sector?.toLowerCase().includes(s));
+          }
+          if (args.category) {
+            const c = String(args.category).toUpperCase();
+            list = list.filter((r) => String(r.category || "").toUpperCase() === c);
+          }
+          const order = args.order || "gainers";
+          list.sort((a, b) =>
+            order === "losers" ? (a.changePct ?? 0) - (b.changePct ?? 0)
+            : order === "active" ? (b.volume ?? 0) - (a.volume ?? 0)
+            : (b.changePct ?? 0) - (a.changePct ?? 0));
+          const limit = Math.min(Math.max(Number(args.limit) || 4, 1), 8);
+          return JSON.stringify({
+            results: list.slice(0, limit).map((r) => ({
+              symbol: r.symbol, name: r.name, sector: r.sector,
+              price: r.ltp, changePct: r.changePct,
+            })),
+          });
+        }
+
+        // "Where is market depth?" — a question about the software, which the first version answered
+        // as though it were a question about the data ("I can't see market depth"). Now it opens it.
+        case "find_screen": {
+          const hits = await get<any[]>(`/api/ai/help?q=${encodeURIComponent(String(args.query || ""))}&limit=1`);
+          const top = hits?.[0];
+          if (!top) return JSON.stringify({ error: "No screen in this OMS matches that." });
+          if (top.route) navigateRef.current?.(top.route);   // actually take them there
+          return JSON.stringify({
+            opened: true, screen: top.title, what: top.what, how: top.how, route: top.route,
+            say: `You have just opened the ${top.title} screen for the dealer. Tell them so, in one sentence, and what they will see.`,
+          });
+        }
+
+        default:
+          return JSON.stringify({ error: `unknown tool ${name}` });
+      }
     } catch (e: any) {
-      return JSON.stringify({ error: e?.message || "quote lookup failed" });
+      return JSON.stringify({ error: e?.message || `${name} failed` });
     }
   }, []);
 
