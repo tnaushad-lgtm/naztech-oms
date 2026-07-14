@@ -258,23 +258,54 @@ export function AiAdvisor() {
 
               {/* Live-voice status strip — the dealer must be able to see that it is listening. */}
               {liveMode && (
-                <div className="flex items-center gap-2 border-b border-line/[0.1] bg-surface/[0.04] px-4 py-2">
-                  <span className={`h-2 w-2 rounded-full ${
-                    voice.state === "live" ? (voice.listening ? "bg-bull animate-pulseDot"
-                                            : voice.speaking ? "bg-aurora-cyan animate-pulseDot" : "bg-bull")
-                    : voice.state === "connecting" ? "bg-amber-400 animate-pulseDot" : "bg-bear"}`} />
-                  <span className="text-[11.5px] text-ink-300">
-                    {voice.state === "connecting" && "Connecting… allow the microphone when Chrome asks."}
-                    {voice.state === "live" && (voice.listening ? "Listening…"
-                      : voice.speaking ? "Speaking — just talk over it to interrupt"
-                      : "Go ahead, I'm listening")}
-                    {voice.state === "error" && (voice.error || "The voice session failed")}
-                    {voice.state === "idle" && "Starting…"}
-                  </span>
-                  <span className="ml-auto text-[10px] text-ink-600">
-                    {providers?.realtimeModel} · billed per second of audio
-                  </span>
-                </div>
+                <>
+                  <div className="flex items-center gap-2 border-b border-line/[0.1] bg-surface/[0.04] px-4 py-2">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${
+                      voice.state === "live" ? (voice.listening ? "bg-bull animate-pulseDot"
+                                              : voice.speaking ? "bg-aurora-cyan animate-pulseDot" : "bg-bull")
+                      : voice.state === "connecting" ? "bg-amber-400 animate-pulseDot" : "bg-bear"}`} />
+                    <span className="text-[11.5px] text-ink-300">
+                      {voice.state === "connecting" && "Connecting… allow the microphone when Chrome asks."}
+                      {voice.state === "live" && (voice.listening ? "Listening…"
+                        : voice.speaking ? "Speaking — just talk over it to interrupt"
+                        : "Go ahead, I'm listening")}
+                      {voice.state === "error" && (voice.error || "The voice session failed")}
+                      {voice.state === "idle" && "Starting…"}
+                    </span>
+
+                    {/* The mic meter. If this bar does not move when you speak, the browser is not
+                        hearing you — and that is a device problem, not an OMS one. */}
+                    {voice.state === "live" && (
+                      <span className="flex items-center gap-1.5" title={voice.micLabel || "microphone"}>
+                        <span className="text-[10px] text-ink-600">🎤</span>
+                        <span className="flex h-2.5 w-20 items-center overflow-hidden rounded-full bg-surface/[0.12]">
+                          <span className={`h-full rounded-full transition-[width] duration-75 ${
+                            voice.micSilent ? "bg-bear" : "bg-gradient-to-r from-bull to-aurora-cyan"}`}
+                            style={{ width: `${Math.round(voice.micLevel * 100)}%` }} />
+                        </span>
+                      </span>
+                    )}
+
+                    <span className="ml-auto shrink-0 text-[10px] text-ink-600">
+                      {providers?.realtimeModel} · billed per second of audio
+                    </span>
+                  </div>
+
+                  {/* Ten seconds live and not a sound reaching us. Say what is wrong AND how to fix it —
+                      "check your microphone" would send the dealer to the one setting that is fine. */}
+                  {voice.micSilent && (
+                    <div className="border-b border-bear/25 bg-bear/[0.08] px-4 py-2 text-[11.5px] text-bear">
+                      <b>Your microphone is sending silence.</b> Chrome is capturing
+                      {voice.micLabel ? <> “{voice.micLabel}”</> : " a device"}, and nothing is coming out of it.
+                      <div className="mt-0.5 text-ink-400">
+                        This is almost always the wrong input device — a virtual cable (VB-Audio, VoiceMeeter,
+                        OBS) rather than a real microphone. Fix it in{" "}
+                        <b className="text-ink-200">Windows Settings → System → Sound → Input</b>, pick your real
+                        mic, then reload this page and start the call again.
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* messages */}

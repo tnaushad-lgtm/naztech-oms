@@ -30,11 +30,27 @@ export function useRealtimeVoice() {
   const [speaking, setSpeaking] = useState(false);   // the model is talking
   const [listening, setListening] = useState(false); // the dealer is talking
 
+  /**
+   * How loud the microphone actually is, 0–1.
+   *
+   * This exists because of a real hour lost: Windows had the default input device set to a VB-Audio
+   * virtual cable — a loopback with nothing on it — so the browser happily captured silence. The
+   * greeting played, the dealer spoke, and nothing happened. Everything was "working". A meter would
+   * have said "your microphone is producing no sound" in one glance, so now there is one.
+   */
+  const [micLevel, setMicLevel] = useState(0);
+  /** True once we have been live a while and have heard nothing at all — almost always a wrong device. */
+  const [micSilent, setMicSilent] = useState(false);
+  /** The microphone Windows actually gave us, so a wrong one can be recognised on sight. */
+  const [micLabel, setMicLabel] = useState("");
+
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const micRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const assistantRef = useRef<string>("");
+  const acRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef<number>(0);
 
   /** The model asked for a live price. Answer it from the OMS's own market data, not a second source. */
   const runTool = useCallback(async (name: string, argsJson: string): Promise<string> => {
@@ -56,10 +72,13 @@ export function useRealtimeVoice() {
   const send = (obj: any) => dcRef.current?.readyState === "open" && dcRef.current.send(JSON.stringify(obj));
 
   const stop = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    acRef.current?.close().catch(() => {});
     dcRef.current?.close();
     pcRef.current?.close();
     micRef.current?.getTracks().forEach((t) => t.stop());
     audioRef.current?.remove();
+    acRef.current = null;
     dcRef.current = null;
     pcRef.current = null;
     micRef.current = null;
@@ -67,7 +86,40 @@ export function useRealtimeVoice() {
     setState("idle");
     setSpeaking(false);
     setListening(false);
+    setMicLevel(0);
+    setMicSilent(false);
   }, []);
+
+  /** Watch the microphone's actual amplitude, so "it can't hear me" becomes a thing you can see. */
+  const meter = (stream: MediaStream) => {
+    const ac = new AudioContext();
+    acRef.current = ac;
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 512;
+    ac.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+
+    const startedAt = Date.now();
+    let peak = 0;
+    const tick = () => {
+      analyser.getByteTimeDomainData(buf);
+      // Root-mean-square around the 128 midpoint — a fair measure of loudness, unlike peak alone.
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const level = Math.min(1, Math.sqrt(sum / buf.length) * 4);
+      setMicLevel(level);
+      peak = Math.max(peak, level);
+
+      // Ten seconds of live audio with no signal at all is not shyness — it is the wrong device.
+      if (Date.now() - startedAt > 10_000) setMicSilent(peak < 0.02);
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    tick();
+  };
 
   const start = useCallback(async (accountId?: number, lang: "en" | "bn" = "en") => {
     if (pcRef.current) return;
@@ -91,9 +143,15 @@ export function useRealtimeVoice() {
       pc.ontrack = (e) => { audio.srcObject = e.streams[0]; };
 
       // The dealer's microphone goes the other way.
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mic = await navigator.mediaDevices.getUserMedia({
+        // Ask for the treatment a speakerphone gets: without echo cancellation the model hears its own
+        // voice through the laptop speakers and interrupts itself, which is as absurd as it sounds.
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       micRef.current = mic;
       pc.addTrack(mic.getTracks()[0]);
+      setMicLabel(mic.getAudioTracks()[0]?.label || "");
+      meter(mic);
 
       // 3. Events (transcripts, tool calls) ride a data channel alongside the audio.
       const dc = pc.createDataChannel("oai-events");
@@ -210,5 +268,5 @@ export function useRealtimeVoice() {
     setTurns((t) => [...t, { role: "user", text }]);
   }, []);
 
-  return { state, error, turns, speaking, listening, start, stop, sendText };
+  return { state, error, turns, speaking, listening, start, stop, sendText, micLevel, micSilent, micLabel };
 }
