@@ -88,9 +88,14 @@ public class ExecutionService {
                 BigDecimal lastPx = msg.isSetField(LastPx.FIELD)
                         ? BigDecimal.valueOf(msg.getDouble(LastPx.FIELD)) : nz(o.getPrice());
                 recordFill(o, (long) lastQty, lastPx, msg);
+                // Maintain the running average fill price ourselves (VWAP over the fills). A venue that
+                // does send AvgPx(6) overrides this below with its authoritative figure; nFIX does not
+                // send it, so without this a fully-filled order shows an average of 0.00.
+                fills.applyFill(o, (long) lastQty, lastPx);
             }
 
-            // Prefer the exchange's cumulative figures when present (authoritative, dedup-safe).
+            // Prefer the exchange's cumulative figures when present (authoritative, dedup-safe) — these
+            // override our own accumulation, which is exactly what we want when the venue provides them.
             if (msg.isSetField(CumQty.FIELD)) o.setFilledQty((long) msg.getDouble(CumQty.FIELD));
             if (msg.isSetField(AvgPx.FIELD) && msg.getDouble(AvgPx.FIELD) > 0)
                 o.setAvgFillPrice(BigDecimal.valueOf(msg.getDouble(AvgPx.FIELD)));
