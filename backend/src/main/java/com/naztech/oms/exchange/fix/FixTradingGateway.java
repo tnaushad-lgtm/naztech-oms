@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import quickfix.Message;
 import quickfix.Session;
 import quickfix.SessionID;
@@ -75,7 +77,39 @@ public class FixTradingGateway implements MatchingGateway {
                 .orElseThrow(() -> new IllegalStateException("Unknown security " + order.getSecurityId()));
     }
 
+    /**
+     * Send a FIX message — but only once the caller's transaction has committed.
+     *
+     * <p>Order entry runs inside {@code @Transactional OrderService.place()}: the order row is written
+     * but not yet committed when we get here. The exchange is on the LAN and acks a NewOrderSingle in
+     * single-digit milliseconds, and that {@code ExecutionReport} is handled on the FIX message-processor
+     * thread, which looks the order up by ref. Sending <em>inside</em> the transaction races nFIX's ack
+     * against our own commit — the ack arrives, the order is not yet visible to the other thread, it is
+     * logged as "unknown order" and dropped, and the order is stranded in {@code PENDING_RISK} even though
+     * the exchange shows it open. Deferring the send to {@code afterCommit} makes the order durable and
+     * visible <em>before</em> it can be acked. A rollback now correctly sends nothing.
+     *
+     * <p>If there is no active transaction (a direct call), send immediately and let errors propagate.
+     */
     private void send(Message m, String ref, String what) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() {
+                    try {
+                        doSend(m, ref, what);
+                    } catch (RuntimeException e) {
+                        // The order is already committed; we cannot unwind it here. Log loudly — it sits
+                        // in PENDING_RISK, visible to the desk, and can be cancelled and re-placed.
+                        log.error("FIX {} not sent after commit (ref={}): {}", what, ref, e.toString());
+                    }
+                }
+            });
+        } else {
+            doSend(m, ref, what);
+        }
+    }
+
+    private void doSend(Message m, String ref, String what) {
         try {
             boolean sent = Session.sendToTarget(m, sessionId());
             if (sent) log.info("FIX {} sent (ref={})", what, ref);
