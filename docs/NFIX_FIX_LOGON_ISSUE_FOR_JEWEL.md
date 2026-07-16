@@ -74,7 +74,41 @@ The problem is specific to the **FIX acceptor component**.
 
 ---
 
-## UPDATE (16 Jul, after reviewing your `dse-oms-core` reference)
+## UPDATE 2 (16 Jul, decisive) — it's the nFIX FIX acceptor, right now
+
+I retract the "loopback bind" guess below — Anirban's `application.yaml` sets
+`dse.fix.host: 10.33.1.23` (the server IP) and his `FixInitiatorConfig` overrides the cfg with it, so
+his OMS connects to nFIX's FIX **remotely** and it works. Remote FIX is fine; the bind is not the issue.
+
+So I ran the cleanest possible test: **stopped our OMS entirely** (CompID `OMS` free, no reconnect
+churn), and sent **one** bare-minimum FIX.5.0SP1 logon from a raw socket:
+
+```
+>> 8=FIXT.1.1|9=70|35=A|49=OMS|56=DSE|34=1|52=20260716-07:19:48|98=0|108=30|141=Y|1137=8|10=204
+<< (nothing — socket closed by peer, END_OF_STREAM)
+```
+
+That logon has nothing to do with our OMS — no engine, no store, no extra fields — and nFIX **still**
+drops it. Combined with the line-by-line match to Anirban's proven config, this means:
+
+> **Our side is correct. nFIX's FIX acceptor on `:9014` is currently refusing every logon.**
+
+Most likely because you're **actively working on nFIX** (antigravity/claude code) and the FIX acceptor
+is down / mid-restart / the trading session isn't started. The ITCH acceptor on `:9012` is up and
+serving us perfectly the whole time, so nFIX-the-process is running — it's specifically the FIX
+acceptor.
+
+**What would confirm it in 10 seconds on your side:** from the nFIX box, run
+`Test-NetConnection 127.0.0.1 -Port 9014` and then a local logon (or just watch the nFIX FIX event
+log while I'm connecting — my OMS retries every 5s as `OMS→DSE`). If you see our `35=A` arrive and get
+rejected, the log will say why; if you don't see it arrive at all, the acceptor isn't reading.
+
+Our OMS is left running and **will connect automatically** the moment your acceptor accepts logons —
+no change needed on our side.
+
+---
+
+## UPDATE 1 (16 Jul, after reviewing your `dse-oms-core` reference)
 
 Thanks for the zip. I compared Anirban's proven OMS against ours **line by line**, and **our setups are
 identical** — so this is not a config difference on our side. The strong new clue is
