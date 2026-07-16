@@ -25,9 +25,27 @@ import java.time.ZoneOffset;
  * Builds outbound FIX 5.0 SP1 order messages from OMS orders. Core FIX fields only (works against
  * FIXSIM and a standard exchange); DSE-specific enrichment (Parties/PartyRole=5, OrderRestrictions,
  * bond Yield) is layered on when we have real DSE certification access.
+ *
+ * <h2>What goes in Symbol(55)</h2>
+ * A venue identifies an instrument by its own key, and the two venues we talk to disagree. Our local
+ * test exchange matches on the <b>ticker</b> ("GP"); the DSE X-stream simulator (nFIX) and real DSE
+ * match on the integer <b>order-book id</b> ("1004"). Sending the wrong one means every order comes
+ * back "unknown symbol". {@code fix.symbol} selects which — {@code ticker} (default, for the local
+ * exchange) or {@code orderbookid} (for nFIX / real DSE, where our {@code security.id} <em>is</em> the
+ * order-book id because the master is built from the feed).
  */
 @Component
 public class FixMessageFactory {
+
+    @org.springframework.beans.factory.annotation.Value("${fix.symbol:ticker}")
+    private String symbolMode;
+
+    /** The instrument key this venue expects in Symbol(55). */
+    private String venueSymbol(Security sec) {
+        return "orderbookid".equalsIgnoreCase(symbolMode)
+                ? String.valueOf(sec.getId())        // = the DSE order-book id
+                : sec.getSymbol();
+    }
 
     public NewOrderSingle newOrderSingle(OmsOrder o, Security sec) {
         NewOrderSingle m = new NewOrderSingle();
@@ -35,7 +53,7 @@ public class FixMessageFactory {
         m.set(new Side(side(o.getSide())));
         m.set(new TransactTime(LocalDateTime.now(ZoneOffset.UTC)));
         m.set(new OrdType(ordType(o.getOrderType())));
-        m.set(new Symbol(sec.getSymbol()));
+        m.set(new Symbol(venueSymbol(sec)));
         m.set(new OrderQty(o.getQuantity() == null ? 0 : o.getQuantity().doubleValue()));
         if (isLimit(o)) {
             if ("YIELD".equalsIgnoreCase(o.getPriceBasis()) && o.getOrderYield() != null) {
@@ -55,7 +73,7 @@ public class FixMessageFactory {
         m.set(new ClOrdID(newClOrdId));
         m.set(new Side(side(o.getSide())));
         m.set(new TransactTime(LocalDateTime.now(ZoneOffset.UTC)));
-        m.set(new Symbol(sec.getSymbol()));
+        m.set(new Symbol(venueSymbol(sec)));
         m.set(new OrderQty(o.getQuantity() == null ? 0 : o.getQuantity().doubleValue()));
         return m;
     }
@@ -67,7 +85,7 @@ public class FixMessageFactory {
         m.set(new Side(side(o.getSide())));
         m.set(new TransactTime(LocalDateTime.now(ZoneOffset.UTC)));
         m.set(new OrdType(ordType(o.getOrderType())));
-        m.set(new Symbol(sec.getSymbol()));
+        m.set(new Symbol(venueSymbol(sec)));
         m.set(new OrderQty(newQty));
         if (newPrice != null) m.set(new Price(newPrice.doubleValue()));
         return m;

@@ -38,8 +38,8 @@ fix:
   reconnect-seconds: 5
 
 itch:
-  enabled: false
-  transport: simulator                         # simulator | soupbintcp | moldudp64
+  enabled: ${ITCH_ENABLED:false}
+  transport: ${ITCH_TRANSPORT:simulator}       # simulator | soupbintcp | moldudp64
   host: ${ITCH_HOST:}                           # soupbintcp
   port: ${ITCH_PORT:0}                          # soupbintcp port, or the multicast port for moldudp64
   group: ${ITCH_MOLD_GROUP:}                    # multicast group (moldudp64)

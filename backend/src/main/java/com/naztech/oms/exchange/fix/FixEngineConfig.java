@@ -101,6 +101,12 @@ public class FixEngineConfig {
         s.setString(sid, "TransportDataDictionary", props.getTransportDataDictionary());
         s.setString(sid, "AppDataDictionary", props.getAppDataDictionary());
         s.setString(sid, "ResetOnLogon", props.isResetSeqNumFlag() ? "Y" : "N");
+        // Be lenient about what the venue sends. A real exchange (nFIX / DSE) puts extension fields on
+        // the wire — a Position Report with the firm limit, custom tags on execution reports — and we
+        // would rather read the execution and drop the extra field than have QuickFIX/J reject the whole
+        // message over a dictionary quibble. Our OWN messages are still built strictly.
+        s.setString(sid, "ValidateIncomingMessage", "N");
+        s.setString(sid, "ValidateFieldsOutOfOrder", "N");
         if (props.isSsl()) {
             s.setString(sid, "SocketUseSSL", "Y");
         }

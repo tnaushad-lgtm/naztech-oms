@@ -94,6 +94,15 @@ public class ItchGateway implements MarketDataGateway {
                 log.debug("ITCH: already open");
                 return;
             }
+            // A real venue (SoupBinTCP / MoldUDP64 — nFIX or DSE) sends its own day-start sequence and
+            // owns the books. We must NOT invent our own directory on top of it: two directories for the
+            // same order-book ids is how a feed handler ends up showing phantom liquidity nobody placed.
+            // We still pre-create an empty book and remember the ticker for each order-book id, so the
+            // depth the venue streams maps straight onto the instrument the dealer is looking at — which
+            // works precisely because our security.id IS the order-book id (the master is built from the
+            // feed). The simulator, by contrast, is our own venue, so there we do broadcast and seed.
+            boolean liveVenue = isLiveTransport();
+
             List<Security> listed = new ArrayList<>();
             List<ItchSimulator.Instrument> instruments = new ArrayList<>();
             for (Security s : securityRepo.findAll()) {
@@ -106,29 +115,37 @@ public class ItchGateway implements MarketDataGateway {
                 long tick = tickRaw(s);
                 instruments.add(new ItchSimulator.Instrument(s.getId(), s.getSymbol(), s.getName(), ref, PRICE_DECIMALS, tick));
             }
-            if (instruments.isEmpty()) { log.warn("ITCH: no active equities to simulate"); return; }
+            if (instruments.isEmpty()) { log.warn("ITCH: no active equities to map"); return; }
 
-            // The morning broadcast: system event -> tick tables -> companies -> instrument directory
-            // -> trading action. This is what a broker's feed handler consumes to build its universe.
             long ts = System.currentTimeMillis() / 1000;
             int broadcast = 0;
-            for (Itch.Msg m : ItchDayBroadcast.open(listed, ts, PRICE_DECIMALS)) {
-                route(wire(m));
-                broadcast++;
+            if (!liveVenue) {
+                // The morning broadcast: system event -> tick tables -> companies -> instrument directory
+                // -> trading action. Only for our own simulator; a real venue does this itself.
+                for (Itch.Msg m : ItchDayBroadcast.open(listed, ts, PRICE_DECIMALS)) {
+                    route(wire(m));
+                    broadcast++;
+                }
             }
 
             try {
                 source = buildSource(instruments);
             } catch (IOException e) {
+                if (liveVenue) {
+                    // A live feed that will not connect must fail loudly, not silently pretend to be a
+                    // market by falling back to the simulator — a fabricated book is worse than no book.
+                    log.error("ITCH: could not connect to the live feed ({}) — market data is DOWN", e.toString());
+                    return;
+                }
                 log.error("ITCH: could not open configured source ({}) — falling back to simulator", e.toString());
                 source = new SimulatorSource(instruments, props.getSeed(), props.getBurst());
             }
-            for (Itch.Msg m : source.open()) route(wire(m));   // seed the books
+            for (Itch.Msg m : source.open()) route(wire(m));   // empty for a live feed; seeds the sim
             ready = true;
             feedLive = true;
-            log.info("ITCH MARKET OPEN — broadcast {} day-start messages ({} instruments, {} indices), "
-                            + "feed live (source='{}', transport='{}')",
-                    broadcast, instruments.size(), indexIds.size(), source.name(), props.getTransport());
+            log.info("ITCH MARKET OPEN — {} ({} instruments mapped, {} indices), source='{}', transport='{}'",
+                    liveVenue ? "consuming the live venue feed" : ("broadcast " + broadcast + " day-start messages"),
+                    instruments.size(), indexIds.size(), source.name(), props.getTransport());
         }
     }
 
@@ -251,7 +268,9 @@ public class ItchGateway implements MarketDataGateway {
         if (!ready || !feedLive || source == null) return;
         synchronized (lock) {
             for (Itch.Msg m : source.poll()) route(wire(m));
-            driftIndices();
+            // Only nudge indices for our own simulator. A live venue sends real index values ([Z]);
+            // faking drift on top of them would fight the real feed and mislead the desk.
+            if (!isLiveTransport()) driftIndices();
             if (props.isValidate()) validateBooks();
             snapshotDepth();
         }
@@ -299,6 +318,12 @@ public class ItchGateway implements MarketDataGateway {
     public String source() { return "itch"; }
 
     // ------------------------------------------------------------------ routing
+    /** A real exchange transport (nFIX / DSE), as opposed to our in-process simulator or a replay file. */
+    private boolean isLiveTransport() {
+        String t = props.getTransport();
+        return !props.isReplay() && ("soupbintcp".equalsIgnoreCase(t) || "moldudp64".equalsIgnoreCase(t));
+    }
+
     /** Round-trip through the binary codec, exactly as a real client decodes the wire. */
     private Itch.Msg wire(Itch.Msg m) { return ItchCodec.decode(ItchCodec.encode(m)); }
 
