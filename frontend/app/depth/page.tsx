@@ -123,49 +123,64 @@ export default function DepthPage() {
               </div>
             ) : (
               <>
-                {/* the numbers a dealer reads first */}
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
-                  <Stat k="Best bid" v={nf(stats!.bestBid)} sub={`${nfInt(depth!.bids[0].quantity)} qty`} tone="bull" />
-                  <Stat k="Best ask" v={nf(stats!.bestAsk)} sub={`${nfInt(depth!.asks[0].quantity)} qty`} tone="bear" />
-                  <Stat k="Spread" v={nf(stats!.spread)} sub={`${stats!.spreadBps.toFixed(1)} bps`} />
-                  <Stat k="Mid" v={nf(stats!.mid)} />
-                  <Stat k="Microprice" v={nf(stats!.microprice)}
-                    sub={stats!.microprice > stats!.mid ? "leaning up" : stats!.microprice < stats!.mid ? "leaning down" : "at mid"}
-                    tone="cyan" />
-                  <Stat k="Bid depth" v={nfInt(stats!.bidQty)} sub={`${stats!.bidOrders} orders`} tone="bull" />
-                  <Stat k="Ask depth" v={nfInt(stats!.askQty)} sub={`${stats!.askOrders} orders`} tone="bear" />
-                </div>
-
-                <div className="mt-4">
-                  <ImbalanceBar imbalance={stats!.imbalance} />
-                </div>
-
-                <div className="mt-4 grid grid-cols-12 gap-4">
-                  <div className="col-span-12 xl:col-span-7">
-                    <div className="panel-title mb-1.5">Depth curve — cumulative size at each price</div>
-                    <DepthCurve depth={depth!} />
-                    <div className="mt-1 flex justify-between text-[10px] text-ink-600">
-                      <span>Bids · VWAP {nf(stats!.bidVwap)}</span>
-                      <span>Asks · VWAP {nf(stats!.askVwap)}</span>
+                {/* The spread/microprice numbers need BOTH sides — bookStats returns null otherwise. A
+                    one-sided book (bids-only or asks-only, common on a live venue) is valid and must
+                    still render its ladder, so these stats are guarded rather than assumed. Reading
+                    stats!.bestBid on a one-sided book is exactly what was crashing this page. */}
+                {stats ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
+                      <Stat k="Best bid" v={nf(stats.bestBid)} sub={`${nfInt(depth!.bids[0].quantity)} qty`} tone="bull" />
+                      <Stat k="Best ask" v={nf(stats.bestAsk)} sub={`${nfInt(depth!.asks[0].quantity)} qty`} tone="bear" />
+                      <Stat k="Spread" v={nf(stats.spread)} sub={`${stats.spreadBps.toFixed(1)} bps`} />
+                      <Stat k="Mid" v={nf(stats.mid)} />
+                      <Stat k="Microprice" v={nf(stats.microprice)}
+                        sub={stats.microprice > stats.mid ? "leaning up" : stats.microprice < stats.mid ? "leaning down" : "at mid"}
+                        tone="cyan" />
+                      <Stat k="Bid depth" v={nfInt(stats.bidQty)} sub={`${stats.bidOrders} orders`} tone="bull" />
+                      <Stat k="Ask depth" v={nfInt(stats.askQty)} sub={`${stats.askOrders} orders`} tone="bear" />
                     </div>
-                  </div>
-                  <div className="col-span-12 xl:col-span-5">
-                    <div className="panel-title mb-1.5">Recent trades</div>
-                    <div className="max-h-[200px] overflow-y-auto rounded-xl border border-line/[0.08]">
-                      {tape.length === 0 && <div className="px-3 py-6 text-center text-[11px] text-ink-600">No prints yet</div>}
-                      {tape.map((t, i) => (
-                        <div key={i} className="flex items-center justify-between border-t border-line/[0.05] px-3 py-1 text-[11.5px] tnum first:border-0">
-                          <span className="text-ink-600">{String(t.executedAt || "").slice(11, 19)}</span>
-                          <span className={t.side === "SELL" ? "text-bear" : "text-bull"}>{nf(t.price)}</span>
-                          <span className="text-ink-300">{nfInt(t.quantity)}</span>
+
+                    <div className="mt-4">
+                      <ImbalanceBar imbalance={stats.imbalance} />
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-12 gap-4">
+                      <div className="col-span-12 xl:col-span-7">
+                        <div className="panel-title mb-1.5">Depth curve — cumulative size at each price</div>
+                        <DepthCurve depth={depth!} />
+                        <div className="mt-1 flex justify-between text-[10px] text-ink-600">
+                          <span>Bids · VWAP {nf(stats.bidVwap)}</span>
+                          <span>Asks · VWAP {nf(stats.askVwap)}</span>
                         </div>
-                      ))}
+                      </div>
+                      <div className="col-span-12 xl:col-span-5">
+                        <div className="panel-title mb-1.5">Recent trades</div>
+                        <div className="max-h-[200px] overflow-y-auto rounded-xl border border-line/[0.08]">
+                          {tape.length === 0 && <div className="px-3 py-6 text-center text-[11px] text-ink-600">No prints yet</div>}
+                          {tape.map((t, i) => (
+                            <div key={i} className="flex items-center justify-between border-t border-line/[0.05] px-3 py-1 text-[11.5px] tnum first:border-0">
+                              <span className="text-ink-600">{String(t.executedAt || "").slice(11, 19)}</span>
+                              <span className={t.side === "SELL" ? "text-bear" : "text-bull"}>{nf(t.price)}</span>
+                              <span className="text-ink-300">{nfInt(t.quantity)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-[12px] text-ink-300">
+                    <b className="text-ink-100">One-sided book</b> — only {depth!.bids?.length ? "bids" : "asks"} are
+                    resting right now, so spread and microprice can't be computed. The ladder below shows the side
+                    that has liquidity.
                   </div>
-                </div>
+                )}
 
                 <div className="mt-4">
-                  <div className="panel-title mb-1.5">Order book — {stats!.levels} levels a side</div>
+                  <div className="panel-title mb-1.5">
+                    Order book — {Math.max(depth!.bids?.length || 0, depth!.asks?.length || 0)} levels a side
+                  </div>
                   <FullLadder depth={depth!} changed={changed} />
                 </div>
               </>
