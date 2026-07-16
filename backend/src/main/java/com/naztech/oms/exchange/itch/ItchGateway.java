@@ -120,6 +120,12 @@ public class ItchGateway implements MarketDataGateway {
             }
             if (instruments.isEmpty()) { log.warn("ITCH: no active equities to map"); return; }
 
+            // The feed is about to rebuild the entire day: a live venue replays from sequence 1, the
+            // simulator generates a fresh day. Either way the day's running totals must start at zero, or
+            // a restart re-adds the whole day on top of the last one and volume/turnover inflate. Zero
+            // them here, before the first trade lands.
+            marketData.resetDayStats(listed.stream().map(Security::getId).toList());
+
             long ts = System.currentTimeMillis() / 1000;
             int broadcast = 0;
             if (!liveVenue) {
@@ -296,6 +302,9 @@ public class ItchGateway implements MarketDataGateway {
                 log.warn("ITCH: venue restarted — clearing {} books to rebuild from the replay", books.size());
                 for (ItchOrderBook b : books.values()) b.clear();
                 orderToSecurity.clear();
+                // The venue is about to replay the whole day again — zero the running totals too, or the
+                // replay stacks a second day of volume/turnover on top of the first.
+                marketData.resetDayStats(new ArrayList<>(books.keySet()));
             }
             for (Itch.Msg m : source.poll()) route(wire(m));   // builds books in-memory, buffers trades
             // Only nudge indices for our own simulator. A live venue sends real index values ([Z]);

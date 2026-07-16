@@ -317,6 +317,18 @@ public class MarketDataService {
         marketRepo.save(m);
     }
 
+    /**
+     * Zero the day's running totals (volume, trade count, turnover, open/high/low) for a set of
+     * securities. The ITCH feed calls this the instant before it rebuilds the whole day from a full
+     * replay — market open, or a venue restart — so those totals start from nothing instead of being
+     * added to yesterday's, which is what made cumulative volume inflate on every backend restart.
+     */
+    @Transactional
+    public int resetDayStats(Collection<Long> securityIds) {
+        if (securityIds == null || securityIds.isEmpty()) return 0;
+        return marketRepo.resetDayStats(securityIds);
+    }
+
     private BigDecimal pctChange(BigDecimal ltp, BigDecimal ycp) {
         if (ltp == null || ycp == null || ycp.signum() == 0) return BigDecimal.ZERO;
         return ltp.subtract(ycp).multiply(BigDecimal.valueOf(100))
