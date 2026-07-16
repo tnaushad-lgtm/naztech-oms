@@ -25,6 +25,10 @@ public class MarketDataController {
     private final TradeRepo tradeRepo;
     private final SecurityRepo securityRepo;
 
+    /** simulator | dse-cert | dse-prod — when a real venue drives prices, no external feed may overwrite them. */
+    @org.springframework.beans.factory.annotation.Value("${exchange.mode:simulator}")
+    private String exchangeMode;
+
     public MarketDataController(MarketDataService market, MarketDataGateway depthGateway,
                                DepthBroadcaster depthBroadcaster, TradeRepo tradeRepo,
                                SecurityRepo securityRepo) {
@@ -128,10 +132,22 @@ public class MarketDataController {
                 .collect(Collectors.toList());
     }
 
-    /** Ingest endpoint for the Python feed (bdshare / simulator). */
+    /**
+     * Ingest endpoint for the Python feed (bdshare scrape / simulator).
+     *
+     * <p><b>Refused when the OMS is wired to a real venue.</b> The dsebd.org scraper pushes real-world
+     * DSE prices, and when the exchange is nFIX (or real DSE) those fight the ITCH feed and win — the
+     * dealer sees BRACBANK at 64 (dsebd) while the exchange we actually trade on has it at 45 (nFIX),
+     * which is worse than useless. On a live venue the exchange is the single source of price truth, so
+     * the scraper is turned away here rather than left to corrupt the book.
+     */
     @PostMapping("/ingest")
-    public Map<String, Object> ingest(@RequestBody IngestRequest req) {
-        int n = market.ingest(req.quotes());
-        return Map.of("ingested", n);
+    public ResponseEntity<?> ingest(@RequestBody IngestRequest req) {
+        if ("dse-cert".equalsIgnoreCase(exchangeMode) || "dse-prod".equalsIgnoreCase(exchangeMode)) {
+            return ResponseEntity.status(409).body(Map.of("ingested", 0, "rejected", true,
+                    "reason", "exchange.mode=" + exchangeMode + " — prices come from the venue's ITCH feed; "
+                            + "external ingest is disabled so it cannot overwrite them."));
+        }
+        return ResponseEntity.ok(Map.of("ingested", market.ingest(req.quotes())));
     }
 }

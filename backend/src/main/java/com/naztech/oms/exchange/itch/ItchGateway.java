@@ -46,6 +46,7 @@ public class ItchGateway implements MarketDataGateway {
 
     private static final Logger log = LoggerFactory.getLogger(ItchGateway.class);
     private static final int PRICE_DECIMALS = 2;
+    private static final int INDEX_DECIMALS = 2;   // DSE index level is scaled by 100 on the [Z] feed
     private static final int DEPTH_LEVELS = 10;   // what a ladder shows; enough for the terminal
 
     private final SecurityRepo securityRepo;
@@ -362,8 +363,22 @@ public class ItchGateway implements MarketDataGateway {
             case 'U' -> { Itch.OrderReplace u = (Itch.OrderReplace) m; Long sid = orderToSecurity.remove(u.origOrderNumber());
                 if (sid != null) { book(sid).apply(u); orderToSecurity.put(u.newOrderNumber(), sid); } }
             case 'Q' -> onTrade((Itch.Trade) m);
-            default -> { /* T/S/R/H/O/Z/I/N — not book-affecting here */ }
+            case 'Z' -> onIndex((Itch.IndexValue) m);
+            default -> { /* T/S/R/H/O/I/N — not book-affecting here */ }
         }
+    }
+
+    /**
+     * A live index value from the venue (DSEX = book 9001). The index feed carries the level scaled by
+     * 100, so we shift it and write it onto the index instrument — which is why the Index Board was
+     * empty until now: the venue was sending [Z] all along and we were dropping it, and there was no
+     * index security to receive it. Both are fixed: the DSEX row exists (id = the index book id) and
+     * this consumes the feed.
+     */
+    private void onIndex(Itch.IndexValue z) {
+        BigDecimal value = BigDecimal.valueOf(z.value()).movePointLeft(INDEX_DECIMALS);
+        marketData.applyIndex(z.indexOrderbook(), value);
+        stream.publish("indices", Map.of("ts", 0));
     }
 
     private void onTrade(Itch.Trade q) {
