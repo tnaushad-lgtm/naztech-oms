@@ -20,15 +20,21 @@ echo Stopping anything on port 8090...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8090" ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 
 REM ---- route orders over real FIX to nFIX ----
+REM  Our SenderCompID is naztechoms (case-sensitive!) — our unique broker identity, so we do NOT
+REM  collide with Jewel's OMS (which logs on as "OMS"). nFIX's acceptor must be configured to accept
+REM  49=naztechoms. TargetCompID stays DSE (the exchange is the same for every broker).
 set "EXCHANGE_MODE=dse-cert"
 set "FIX_ENABLED=true"
 set "FIX_HOST=10.33.1.23"
 set "FIX_PORT=9014"
-set "FIX_SENDER_COMP_ID=OMS"
+set "FIX_SENDER_COMP_ID=naztechoms"
 set "FIX_TARGET_COMP_ID=DSE"
 set "FIX_SYMBOL=orderbookid"
 
 REM ---- consume nFIX market data over ITCH / SoupBinTCP ----
+REM  ITCH is a broadcast subscription (many clients can subscribe; the username is not an exclusive
+REM  session and the SoupBinTCP username field is only 6 bytes, so we keep the short "OMS" here — it
+REM  is proven working and does not collide with anyone).
 set "ITCH_ENABLED=true"
 set "ITCH_TRANSPORT=soupbintcp"
 set "ITCH_HOST=10.33.1.23"
