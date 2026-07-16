@@ -85,7 +85,10 @@ public final class SoupBinTcp {
         b.put(fixed(username, 6));
         b.put(fixed(password, 10));
         b.put(fixed(session, 10));
-        b.put(fixed(sequence <= 0 ? "" : String.valueOf(sequence), 20));   // blank = "from the next one"
+        // The requested sequence is RIGHT-justified, unlike the alpha fields — the DSE/nFIX ITCH spec
+        // is explicit about it. 0 stays blank ("only new messages"); a real number is padded on the
+        // left so "1" arrives as 19 spaces then "1", which is what the server parses.
+        b.put(rjustNum(sequence <= 0 ? "" : String.valueOf(sequence), 20));
         return encode(new Packet(LOGIN_REQUEST, b.array()));
     }
 
@@ -111,6 +114,16 @@ public final class SoupBinTcp {
         java.util.Arrays.fill(out, (byte) ' ');
         byte[] src = (s == null ? "" : s).getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(src, 0, out, 0, Math.min(src.length, width));
+        return out;
+    }
+
+    /** Right-aligned, space-padded — for the numeric Sequence field in the Login Request. */
+    private static byte[] rjustNum(String s, int width) {
+        byte[] out = new byte[width];
+        java.util.Arrays.fill(out, (byte) ' ');
+        byte[] src = (s == null ? "" : s).getBytes(StandardCharsets.US_ASCII);
+        int n = Math.min(src.length, width);
+        System.arraycopy(src, 0, out, width - n, n);
         return out;
     }
 }

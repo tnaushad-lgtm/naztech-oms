@@ -71,19 +71,30 @@ public final class SoupBinTcpSource implements ItchSource {
         this.reader = t;
     }
 
-    /** Log in, asking to resume at whatever we still need. On a first connect that is "the next one". */
+    /**
+     * Log in.
+     *
+     * <p>On the <b>first</b> connect we request sequence <b>1</b> — a full replay of the day. That is
+     * not optional: SoupBinTCP has no separate snapshot service, so the day's opening directory ([R]
+     * messages) and the current resting book are only obtainable by replaying from the start. Requesting
+     * 0 ("only messages from now") leaves us with an empty book in a quiet market — which is exactly the
+     * "ITCH connects but no data" symptom in the integration guide's troubleshooting table.
+     *
+     * <p>On a <b>reconnect</b> we ask for {@code sequencer.expected()} — the exact next message we are
+     * missing — so recovery replays only the gap, in order.
+     */
     private void connect() throws IOException {
         Socket s = new Socket();
         s.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
         s.setTcpNoDelay(true);           // market data is latency, not throughput
         socket = s;
 
-        long resumeAt = sequencer.expected();
+        long resumeAt = Math.max(1, sequencer.expected());   // first connect: 1 = full replay
         OutputStream out = s.getOutputStream();
         out.write(SoupBinTcp.loginRequest(username, password, session, resumeAt));
         out.flush();
-        log.info("ITCH SoupBinTCP: connected to {}:{} as '{}', resuming at {}",
-                host, port, username, resumeAt == 0 ? "the next message" : resumeAt);
+        log.info("ITCH SoupBinTCP: connected to {}:{} as '{}', requesting from sequence {}",
+                host, port, username, resumeAt);
     }
 
     private void readLoop() {
