@@ -235,6 +235,12 @@ public class ItchGateway implements MarketDataGateway {
      * since is suspect and wants a fresh snapshot. The simulator and a replay cannot lose anything, and
      * report nothing.
      */
+    /** The venue's ITCH session id (from Login Accepted), e.g. DSESIM01. Empty if not a live feed. */
+    public String feedSession() {
+        ItchSource s = source;
+        return s instanceof SoupBinTcpSource soup ? soup.sessionName() : "";
+    }
+
     /** Milliseconds since the live feed last sent anything (data or heartbeat). -1 if not a live feed. */
     public long feedIdleMs() {
         ItchSource s = source;

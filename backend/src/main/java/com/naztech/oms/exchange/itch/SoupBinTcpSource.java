@@ -58,6 +58,8 @@ public final class SoupBinTcpSource implements ItchSource {
     private volatile boolean sessionReset;
     /** When the last packet of any kind arrived — the true liveness signal, since heartbeats count. */
     private volatile long lastPacketAt;
+    /** The venue's session id (from Login Accepted), e.g. DSESIM01 — shown in the header. */
+    private volatile String sessionName = "";
 
     public SoupBinTcpSource(String host, int port, String username, String password, String session)
             throws IOException {
@@ -112,6 +114,7 @@ public final class SoupBinTcpSource implements ItchSource {
                         case SoupBinTcp.LOGIN_ACCEPTED -> {
                             SoupBinTcp.LoginAccepted la = SoupBinTcp.parseLoginAccepted(p.payload());
                             seq = la.nextSequence();
+                            sessionName = la.session();              // the venue's session id, for the header
                             // The venue restarted: same feed, but its sequence has rolled back below
                             // where we were. Resuming at our old (higher) number would ask for messages
                             // that no longer exist and the feed would sit silent forever — which is
@@ -235,6 +238,11 @@ public final class SoupBinTcpSource implements ItchSource {
      */
     public long msSinceLastPacket() {
         return lastPacketAt == 0 ? Long.MAX_VALUE : System.currentTimeMillis() - lastPacketAt;
+    }
+
+    /** The venue's ITCH session id (from Login Accepted). */
+    public String sessionName() {
+        return sessionName;
     }
 
     /** True once (per restart) after the venue's sequence rolled back — the gateway clears its books and consumes it. */

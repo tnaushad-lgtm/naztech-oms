@@ -101,6 +101,8 @@ public class ConnectivityController {
                 long idleMs = gw.feedIdleMs();
                 feed.put("idleMs", idleMs);
                 feed.put("live", idleMs >= 0 && idleMs < 8000);   // a packet within 8s = the venue is there
+                feed.put("session", gw.feedSession());            // venue session id, for the header
+                feed.put("seq", Math.max(0, health.expected() - 1));   // the last sequence we applied
                 itchMap.put("feed", feed);
             }
         }

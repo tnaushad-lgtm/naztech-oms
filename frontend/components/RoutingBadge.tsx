@@ -7,7 +7,8 @@ type Status = {
   mode?: string;
   fix?: { enabled?: boolean; loggedOn?: boolean; targetCompId?: string };
   itch?: { enabled?: boolean; transport?: string;
-           feed?: { delivered?: number; healthy?: boolean; lost?: number; live?: boolean; idleMs?: number } };
+           feed?: { delivered?: number; healthy?: boolean; lost?: number; live?: boolean; idleMs?: number;
+                    session?: string; seq?: number } };
 };
 
 type Pill = { c: string; label: string; title: string };
@@ -80,6 +81,15 @@ export function RoutingBadge() {
       )}
       <Chip pill={fix} />
       <Chip pill={itch} />
+      {/* Session + sequence, so a feed that quietly falls behind is visible at a glance. */}
+      {liveVenue && itchEnabled && st.itch?.feed?.session ? (
+        <span className="hidden md:flex items-center gap-2 rounded-full border border-line/[0.12] bg-surface/[0.05] px-2.5 py-1.5 text-[10.5px] text-ink-400"
+          title={`ITCH session ${st.itch.feed.session} · last applied sequence ${st.itch.feed.seq?.toLocaleString()}`}>
+          <span>Session <b className="text-ink-200">{st.itch.feed.session}</b></span>
+          <span className="text-ink-600">·</span>
+          <span className="tnum">Seq <b className="text-ink-200">{(st.itch.feed.seq ?? 0).toLocaleString()}</b></span>
+        </span>
+      ) : null}
     </div>
   );
 }
