@@ -56,6 +56,8 @@ public final class SoupBinTcpSource implements ItchSource {
     private volatile boolean endOfSession;
     /** Set when the venue's sequence rolled back (restart); the gateway clears its books and unsets it. */
     private volatile boolean sessionReset;
+    /** When the last packet of any kind arrived — the true liveness signal, since heartbeats count. */
+    private volatile long lastPacketAt;
 
     public SoupBinTcpSource(String host, int port, String username, String password, String session)
             throws IOException {
@@ -105,6 +107,7 @@ public final class SoupBinTcpSource implements ItchSource {
                 long seq = 0;                                    // set by Login Accepted
                 while (running.get()) {
                     SoupBinTcp.Packet p = SoupBinTcp.decode(in);
+                    lastPacketAt = System.currentTimeMillis();   // ANY packet — data OR heartbeat — is life
                     switch (p.type()) {
                         case SoupBinTcp.LOGIN_ACCEPTED -> {
                             SoupBinTcp.LoginAccepted la = SoupBinTcp.parseLoginAccepted(p.payload());
@@ -221,6 +224,17 @@ public final class SoupBinTcpSource implements ItchSource {
     /** Feed health — gaps seen, gaps recovered, messages given up on. Surfaced on the connectivity page. */
     public ItchSequencer.Health health() {
         return sequencer.health();
+    }
+
+    /**
+     * Milliseconds since the last packet arrived — the honest liveness signal.
+     *
+     * <p>A quiet market sends no order flow but still sends heartbeats (~1/s), so "is the message count
+     * rising?" mistakes a calm market for a dead feed. "Did anything at all arrive recently?" does not.
+     * Returns a large number if we have never received a packet.
+     */
+    public long msSinceLastPacket() {
+        return lastPacketAt == 0 ? Long.MAX_VALUE : System.currentTimeMillis() - lastPacketAt;
     }
 
     /** True once (per restart) after the venue's sequence rolled back — the gateway clears its books and consumes it. */

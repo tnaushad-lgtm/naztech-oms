@@ -97,6 +97,10 @@ public class ConnectivityController {
                 feed.put("lost", health.lost());
                 feed.put("buffered", health.buffered());
                 feed.put("healthy", health.healthy());
+                // Liveness by heartbeat, not by message volume: a quiet market is still a live feed.
+                long idleMs = gw.feedIdleMs();
+                feed.put("idleMs", idleMs);
+                feed.put("live", idleMs >= 0 && idleMs < 8000);   // a packet within 8s = the venue is there
                 itchMap.put("feed", feed);
             }
         }

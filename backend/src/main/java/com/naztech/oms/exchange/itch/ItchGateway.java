@@ -234,6 +234,18 @@ public class ItchGateway implements MarketDataGateway {
      * since is suspect and wants a fresh snapshot. The simulator and a replay cannot lose anything, and
      * report nothing.
      */
+    /** Milliseconds since the live feed last sent anything (data or heartbeat). -1 if not a live feed. */
+    public long feedIdleMs() {
+        ItchSource s = source;
+        if (s instanceof SoupBinTcpSource soup) {
+            return soup.msSinceLastPacket();
+        }
+        if (s instanceof MoldUdp64Source) {
+            return 0;   // multicast has no per-source idle clock here; treat as live while the source runs
+        }
+        return -1;
+    }
+
     public ItchSequencer.Health feedHealth() {
         ItchSource s = source;
         if (s instanceof SoupBinTcpSource soup) {

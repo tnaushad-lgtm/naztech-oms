@@ -6,7 +6,8 @@ import { get } from "@/lib/api";
 type Status = {
   mode?: string;
   fix?: { enabled?: boolean; loggedOn?: boolean; targetCompId?: string };
-  itch?: { enabled?: boolean; transport?: string; feed?: { delivered?: number; healthy?: boolean; lost?: number } };
+  itch?: { enabled?: boolean; transport?: string;
+           feed?: { delivered?: number; healthy?: boolean; lost?: number; live?: boolean; idleMs?: number } };
 };
 
 type Pill = { c: string; label: string; title: string };
@@ -24,32 +25,23 @@ const GREEN = "#22c55e", AMBER = "#f5b43c", RED = "#f5556d", GREY = "#8b93a5";
  */
 export function RoutingBadge() {
   const [st, setSt] = useState<Status | null>(null);
-  const [itchLive, setItchLive] = useState<boolean | null>(null);
-  const prev = useRef<{ delivered: number; at: number }>({ delivered: -1, at: 0 });
+  const [reachable, setReachable] = useState(true);
 
   useEffect(() => {
     let alive = true;
     const load = () =>
       get<Status>("/api/admin/connectivity/status")
-        .then((d) => {
-          if (!alive) return;
-          setSt(d);
-          const delivered = d.itch?.feed?.delivered ?? -1;
-          if (delivered >= 0) {
-            // Advancing since last poll → live. Unchanged → stalled (venue quiet or down).
-            if (prev.current.delivered >= 0) setItchLive(delivered > prev.current.delivered);
-            prev.current = { delivered, at: Date.now() };
-          } else {
-            setItchLive(null);
-          }
-        })
-        .catch(() => { if (alive) { setSt(null); setItchLive(false); } });
+        .then((d) => { if (alive) { setSt(d); setReachable(true); } })
+        .catch(() => { if (alive) setReachable(false); });
     load();
     const t = setInterval(load, 4000);
     return () => { alive = false; clearInterval(t); };
   }, []);
 
   if (!st) return null;
+  // Liveness comes from the backend's heartbeat clock (feed.live) — a packet within 8s — so a quiet
+  // market reads as live, not "offline". null when it isn't a live feed (simulator/replay).
+  const itchLive: boolean | null = st.itch?.feed?.live ?? null;
 
   const mode = (st.mode || "simulator").toLowerCase();
   const liveVenue = mode === "dse-cert" || mode === "dse-prod";
@@ -68,10 +60,10 @@ export function RoutingBadge() {
   const itch: Pill = !itchEnabled
     ? { c: GREY, label: "ITCH off", title: "ITCH market-data feed is disabled." }
     : itchLive === true
-      ? { c: GREEN, label: "ITCH ✓ live", title: `Market data flowing (${st.itch?.transport}), ${st.itch?.feed?.delivered?.toLocaleString()} messages.` }
+      ? { c: GREEN, label: "ITCH ✓ live", title: `Market data feed alive (${st.itch?.transport}), ${st.itch?.feed?.delivered?.toLocaleString()} messages received.` }
       : itchLive === false
-        ? { c: RED, label: "ITCH stalled", title: "ITCH feed is not advancing — the venue may be down or the market is closed." }
-        : { c: AMBER, label: "ITCH…", title: "Checking the ITCH feed…" };
+        ? { c: RED, label: "ITCH down", title: "No ITCH traffic (not even heartbeats) — the venue feed is down." }
+        : { c: AMBER, label: "ITCH…", title: "Connecting to the ITCH feed…" };
 
   // ---- venue-offline call-out: both channels down on a live venue = nFIX is off ----
   const venueOff = liveVenue && !fixOn && itchLive === false;
