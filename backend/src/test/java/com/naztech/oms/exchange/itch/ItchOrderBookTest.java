@@ -54,6 +54,23 @@ class ItchOrderBookTest {
     }
 
     @Test
+    void priceOf_gives_the_resting_price_so_an_E_execution_can_be_priced() {
+        // An [E] Order-Executed carries no price — the trade prints at the resting order's price. The
+        // gateway must read that price BEFORE applying the fill, because a full fill removes the order.
+        // Regression: [E]/[C] were updating the book but never the last-traded price ("price 30 min old").
+        ItchOrderBook b = new ItchOrderBook();
+        b.apply(new AddOrder(1, 101, 'S', 1_000, 5, 30_100, 0));   // ask 301.00 x1000
+        assertThat(b.priceOf(101)).isEqualTo(30_100L);            // resting price, ready to price an [E]
+
+        b.apply(new OrderExecuted(1, 101, 400, 9_001));           // partial fill: order stays, price unchanged
+        assertThat(b.priceOf(101)).isEqualTo(30_100L);
+
+        b.apply(new OrderExecuted(1, 101, 600, 9_002));           // full fill: order gone
+        assertThat(b.priceOf(101)).isEqualTo(-1L);                // -1 → gateway records nothing for it
+        assertThat(b.priceOf(999)).isEqualTo(-1L);                // never-seen order
+    }
+
+    @Test
     void reference_price_and_market_orders_do_not_rest() {
         ItchOrderBook b = new ItchOrderBook();
         b.apply(new AddOrder(1, 0, ' ', 0, 5, 30_000, 0));         // reference-price update (special case)

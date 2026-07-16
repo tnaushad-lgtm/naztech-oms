@@ -361,9 +361,16 @@ public class ItchGateway implements MarketDataGateway {
             case 'F' -> { Itch.AddOrderParticipant f = (Itch.AddOrderParticipant) m;
                 orderToSecurity.put(f.orderNumber(), f.orderbook()); book(f.orderbook()).apply(f); }
             case 'E' -> { Itch.OrderExecuted e = (Itch.OrderExecuted) m; Long sid = orderToSecurity.get(e.orderNumber());
-                if (sid != null) book(sid).apply(e); }
+                if (sid != null) {
+                    long rawPx = book(sid).priceOf(e.orderNumber());   // resting price, read before the fill removes it
+                    book(sid).apply(e);
+                    recordTrade(sid, rawPx, e.execQty(), e.ts());       // [E] prints at the resting order's price
+                } }
             case 'C' -> { Itch.OrderExecutedWithPrice c = (Itch.OrderExecutedWithPrice) m; Long sid = orderToSecurity.get(c.orderNumber());
-                if (sid != null) book(sid).apply(c); }
+                if (sid != null) {
+                    book(sid).apply(c);
+                    if (c.printable() != 'N') recordTrade(sid, c.execPrice(), c.execQty(), c.ts());   // [C] carries its own price
+                } }
             case 'D' -> { Itch.OrderDelete d = (Itch.OrderDelete) m; Long sid = orderToSecurity.remove(d.orderNumber());
                 if (sid != null) book(sid).apply(d); }
             case 'U' -> { Itch.OrderReplace u = (Itch.OrderReplace) m; Long sid = orderToSecurity.remove(u.origOrderNumber());
@@ -389,20 +396,34 @@ public class ItchGateway implements MarketDataGateway {
 
     private void onTrade(Itch.Trade q) {
         if (Itch.isClosePrice(q)) return;
-        Long sid = q.orderbook();
+        if (q.printable() == 'N') return;                 // a non-printable cross is not a last-sale
+        recordTrade(q.orderbook(), q.execPrice(), q.execQty(), q.ts());
+    }
+
+    /**
+     * A trade printed on the venue — move the last price, the day range, the volume and the tape.
+     *
+     * <p>This is called for <b>every</b> price-forming event now, not just the cross: an [E] Order-Executed
+     * (a continuous match against a resting order, printed at that order's price), a [C]
+     * Order-Executed-with-Price, and the [Q] cross/auction Trade. Before, only [Q] reached this path, so
+     * through an entire session of ordinary matching the last-traded price never moved — which is exactly
+     * the "price is 30 minutes old" symptom: the book was updating, but the last sale was stuck at the
+     * last cross. nFIX sends thousands of [E]/[C] to a few hundred [Q], so this is most of the trading.
+     */
+    private void recordTrade(long sid, long rawPrice, long qty, long ts) {
+        if (rawPrice <= 0 || qty <= 0) return;   // [E] on an order we never saw, or a zero-qty print: nothing to record
         ItchOrderBook b = books.get(sid);
-        if (b == null) return;
-        BigDecimal px = scale(q.execPrice());
-        BigDecimal bestBid = b.bestBidRaw() < 0 ? null : scale(b.bestBidRaw());
-        BigDecimal bestAsk = b.bestAskRaw() < 0 ? null : scale(b.bestAskRaw());
-        marketData.applyTrade(sid, px, q.execQty(), bestBid, bestAsk);
+        BigDecimal px = scale(rawPrice);
+        BigDecimal bestBid = (b == null || b.bestBidRaw() < 0) ? null : scale(b.bestBidRaw());
+        BigDecimal bestAsk = (b == null || b.bestAskRaw() < 0) ? null : scale(b.bestAskRaw());
+        marketData.applyTrade(sid, px, qty, bestBid, bestAsk);
         Map<String, Object> tick = new LinkedHashMap<>();
         tick.put("securityId", sid);
         tick.put("symbol", symbols.getOrDefault(sid, "?"));
         tick.put("price", px);
-        tick.put("qty", q.execQty());
+        tick.put("qty", qty);
         tick.put("side", "");
-        tick.put("ts", String.valueOf(q.ts()));
+        tick.put("ts", String.valueOf(ts));
         stream.publish("trade", tick);
     }
 

@@ -53,6 +53,16 @@ public class ItchOrderBook {
         if (o.qty <= 0) orders.remove(orderNumber);
     }
 
+    /**
+     * The raw resting price of an order, or -1 if we don't know it. An [E] Order-Executed message carries
+     * no price of its own — the trade printed at the resting order's price — so the gateway must read it
+     * here <em>before</em> applying the execution, since a full fill removes the order.
+     */
+    public long priceOf(long orderNumber) {
+        Order o = orders.get(orderNumber);
+        return o == null ? -1 : o.price;
+    }
+
     public void replace(long origOrderNumber, long newOrderNumber, long newPrice, long newQty) {
         Order old = orders.remove(origOrderNumber);
         char verb = old != null ? old.verb : 'B';
