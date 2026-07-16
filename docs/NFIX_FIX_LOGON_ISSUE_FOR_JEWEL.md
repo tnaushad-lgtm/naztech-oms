@@ -74,7 +74,48 @@ The problem is specific to the **FIX acceptor component**.
 
 ---
 
-## What to check on the nFIX side, most-likely first
+## UPDATE (16 Jul, after reviewing your `dse-oms-core` reference)
+
+Thanks for the zip. I compared Anirban's proven OMS against ours **line by line**, and **our setups are
+identical** — so this is not a config difference on our side. The strong new clue is
+**localhost vs remote**.
+
+| | Anirban's `dse-oms-core` (works) | Our OMS (dropped) |
+|---|---|---|
+| QuickFIX/J | 2.3.1 | 2.3.1 |
+| CompIDs | `OMS → DSE` | `OMS → DSE` |
+| DefaultApplVerID | FIX.5.0SP1 | FIX.5.0SP1 |
+| ResetOnLogon | Y | Y |
+| Symbol(55) | `String.valueOf(orderbook)` | `String.valueOf(orderbook)` |
+| `toAdmin` on Logon | empty | adds nothing (username blank) |
+| **SocketConnectHost** | **`127.0.0.1`** | **`10.33.1.23` (remote)** |
+
+Anirban's committed `oms-fix.cfg` connects to **`127.0.0.1:9014`** — his OMS and nFIX ran on the
+**same machine**. Ours runs on a laptop connecting across the LAN. **ITCH (9012) works remotely; FIX
+(9014) does not.** And a bare-minimum raw-socket logon — no OMS, no store, nothing but the FIX bytes —
+is dropped exactly the same way, so it is not our engine or our sequence state.
+
+**This points squarely at the FIX acceptor not accepting REMOTE connections** — which your own guide's
+troubleshooting table already flags: *"acceptor bound to loopback (`SocketAcceptAddress` must be
+`0.0.0.0`)."*
+
+### The one test that will confirm it in 2 minutes
+
+Run **Anirban's own `dse-oms-core`** but point it at nFIX **over the network instead of localhost**:
+
+```
+DSE_FIX_HOST=10.33.1.23  DSE_FIX_PORT=9014   # (his FixInitiatorConfig reads these to override the cfg)
+```
+
+- If Anirban's OMS **also** gets `END_OF_STREAM` remotely → it's confirmed: nFIX's FIX acceptor only
+  serves loopback. Fix: bind it to `0.0.0.0` (add `SocketAcceptAddress=0.0.0.0` to nFIX's acceptor
+  settings, same as the ITCH SoupBin acceptor which already does this — that's why ITCH works remotely).
+- If Anirban's OMS **connects** remotely but ours doesn't → then it genuinely is something in our
+  message and I'll dig further; please send me the nFIX FIX event log from both attempts.
+
+---
+
+## Other things to check on the nFIX side (if the bind isn't it)
 
 1. **Is the FIX acceptor actually started, and reading?**
    A silent `END_OF_STREAM` right after the socket opens is the classic signature of a socket that is
