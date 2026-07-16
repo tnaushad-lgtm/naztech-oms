@@ -241,15 +241,17 @@ public class OrderService {
     }
 
     /** Bonds trade on price or yield: derive the missing side so the book always has a clean price and
-     *  the order records the yield it was struck at. Equities are unaffected (PRICE basis, no yield). */
+     *  the order records the yield it was struck at. Equities are unaffected (PRICE basis, no yield).
+     *  The quote is computed to the order's own settlement date — T+2, or T+1 on the spot market —
+     *  because accrued interest belongs to whoever holds the bond at settlement (DSE BRS §1.1.2). */
     private void applyBondPricing(OmsOrder o, OrderRequest req, Security sec) {
         if (!bonds.isBond(sec)) { o.setPriceBasis("PRICE"); o.setOrderYield(null); return; }
         boolean byYield = "YIELD".equalsIgnoreCase(req.priceBasis()) && req.orderYield() != null;
         if (!byYield && (o.getPrice() == null || o.getPrice().signum() <= 0)) {
             o.setPriceBasis("PRICE"); o.setOrderYield(null); return;   // market / no-price bond order
         }
-        BondQuote q = byYield ? bonds.quote(sec, "YIELD", req.orderYield())
-                              : bonds.quote(sec, "PRICE", o.getPrice());
+        BondQuote q = byYield ? bonds.quote(sec, "YIELD", req.orderYield(), o.getTradeWindow())
+                              : bonds.quote(sec, "PRICE", o.getPrice(), o.getTradeWindow());
         o.setPrice(q.cleanPrice());
         o.setOrderYield(q.yield());
         o.setPriceBasis(byYield ? "YIELD" : "PRICE");

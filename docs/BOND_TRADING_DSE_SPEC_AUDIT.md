@@ -1,5 +1,22 @@
 # Bond Trading with Yield — DSE spec vs what the OMS implements
 
+> **UPDATE — 16 July 2026: the priority items below are now IMPLEMENTED.**
+> `BondMath` was rewritten to the BRS §1.1.2 formula (d/T stub period, dedicated N=1
+> simple-interest case, Actual/Actual day count, negative yield) and is **pinned to DSE's own
+> worked examples in `BondMathTest`**: B.1 → clean 100.1337 / accrued 4.8267 / dirty 104.9603,
+> B.3 → 8.0906%. All quotes are now computed to the **settlement date** (T+2, SPOT T+1, Fri/Sat
+> weekend), which makes the ex-coupon case (A.2) fall out naturally. Trades persist
+> **accrued interest and implied yield** (`trade.accrued_interest`, `trade.trade_yield`), stamped
+> on both fill paths — and the FIX path prefers the venue's **tag 159 AccruedInterestAmt** when
+> present. The **§1.1.6 Reference Price Limit** (circuit breaker on clean price,
+> `rms.bond-price-band-pct`, default ±10%) rejects out-of-band bond orders pre-trade, catching
+> fat-fingered yields the same as fat-fingered prices. Securities carry §1.2 config (issue date,
+> total issued, day-count convention) and the BRS board taxonomy (YIELDDBT for TB10Y2034 and
+> BEXGSUKUK; the perpetual PBLPBOND on ALTDBT). Migration: `db/bond_dse_v2_upgrade.sql` (applied).
+> 133 backend tests green. Still open, lower priority: coupon-schedule table for irregular
+> schedules, the BUYDBT board, per-product session model (no opening auction for bonds), and
+> accrued on our own venue's outbound ExecReports.
+
 **Prepared for Naz bhai · 14 July 2026**
 Source spec: `DSE Bond Trading with Yield_for Vendor_23-05-2026.pdf` (BRS V2, DSE-V2-18/05/2026),
 read in full. Audited against `service/BondMath.java`, `service/BondService.java`,

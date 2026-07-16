@@ -53,6 +53,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     private final OrderFillApplier fills;
     private final MarketSessionService session;
     private final ExecutionStats stats;
+    private final BondService bonds;
 
     @Value("${app.matching.autosim:true}")
     private boolean autosim;
@@ -72,7 +73,8 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     public SimulatedMatchingEngine(OmsOrderRepo orderRepo, TradeRepo tradeRepo, SecurityRepo securityRepo,
                                    MarketDataRepo marketRepo, PortfolioService portfolio,
                                    MarketDataService marketData, StreamService stream, AuditService audit,
-                                   OrderFillApplier fills, MarketSessionService session, ExecutionStats stats) {
+                                   OrderFillApplier fills, MarketSessionService session, ExecutionStats stats,
+                                   BondService bonds) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
@@ -84,6 +86,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         this.fills = fills;
         this.session = session;
         this.stats = stats;
+        this.bonds = bonds;
     }
 
     // -------------------------------------------------------------- book model
@@ -257,6 +260,7 @@ public class SimulatedMatchingEngine implements MatchingGateway {
     private void executeFill(Incoming inc, OmsOrder dbOrder, Resting passive, long qty, BigDecimal px) {
         Long buyOrderId  = "BUY".equals(inc.side) ? inc.orderId : passive.orderId;
         Long sellOrderId = "BUY".equals(inc.side) ? passive.orderId : inc.orderId;
+        Security s = securityRepo.findById(inc.securityId).orElse(null);
 
         Trade t = new Trade();
         t.setTradeRef("TRD-" + seq.getAndIncrement() + "-" + (System.currentTimeMillis() % 100000));
@@ -267,6 +271,14 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         t.setQuantity(qty);
         t.setAggressorSide(inc.side);
         t.setExecutedAt(LocalDateTime.now());
+        // Bonds carry their settlement economics on the trade (DSE BRS §1.1.2): the traded price is
+        // the CLEAN price; settlement price = clean + accrued. Persisting accrued and the implied
+        // yield here is what lets anyone downstream reconstruct what actually changes hands at T+2.
+        if (bonds.isBond(s)) {
+            String window = dbOrder != null && dbOrder.getTradeWindow() != null ? dbOrder.getTradeWindow() : "NORMAL";
+            t.setAccruedInterest(bonds.accruedFor(s, window));
+            t.setTradeYield(bonds.yieldAt(s, px, window));
+        }
         tradeRepo.save(t);
 
         // incoming (aggressor) order + portfolio
@@ -297,7 +309,6 @@ public class SimulatedMatchingEngine implements MatchingGateway {
         marketData.applyTrade(inc.securityId, px, qty, bestBid, bestAsk);
 
         // push the tape
-        Security s = securityRepo.findById(inc.securityId).orElse(null);
         Map<String, Object> tick = new LinkedHashMap<>();
         tick.put("securityId", inc.securityId);
         tick.put("symbol", s == null ? "?" : s.getSymbol());

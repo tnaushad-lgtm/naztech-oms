@@ -31,11 +31,21 @@ public class RiskService {
     private final RefDataCache refData;
     private final MarketSessionService session;
     private final TradeWindowRules windows;
+    private final BondService bonds;
+
+    /**
+     * Reference Price Limit for bonds — DSE Bond BRS §1.1.6 ("Circuit breaker will be applied on
+     * clean price of government securities … may be parameterized on clean price" for the rest).
+     * A limit order on a bond whose clean price strays more than this % from the reference price
+     * (yesterday's close) is rejected before it reaches the venue.
+     */
+    @org.springframework.beans.factory.annotation.Value("${rms.bond-price-band-pct:10}")
+    private BigDecimal bondPriceBandPct;
 
     public RiskService(SecurityRepo securityRepo, RiskLimitRepo limitRepo, ClientAccountRepo accountRepo,
                        HoldingRepo holdingRepo, MarketDataRepo marketRepo, OmsOrderRepo orderRepo,
                        BrokerRepo brokerRepo, AiRiskScoringService ai, RefDataCache refData,
-                       MarketSessionService session, TradeWindowRules windows) {
+                       MarketSessionService session, TradeWindowRules windows, BondService bonds) {
         this.securityRepo = securityRepo;
         this.limitRepo = limitRepo;
         this.accountRepo = accountRepo;
@@ -47,6 +57,7 @@ public class RiskService {
         this.refData = refData;
         this.session = session;
         this.windows = windows;
+        this.bonds = bonds;
     }
 
     public RiskResult check(OmsOrder o) {
@@ -78,6 +89,25 @@ public class RiskService {
         // checked it, so any of those could be sent to the exchange and rejected there instead.
         String badWindow = windows.violation(sec, o.getTradeWindow(), qty, notional);
         if (badWindow != null) return reject(badWindow);
+
+        // Bond Reference Price Limit (DSE Bond BRS §1.1.6): the circuit breaker runs on the CLEAN
+        // price against the reference (yesterday's close). By the time we are here a yield-basis
+        // order has already been converted to its clean price, so one check covers both entry modes —
+        // a fat-fingered yield is caught the same as a fat-fingered price.
+        if (bonds.isBond(sec) && "LIMIT".equalsIgnoreCase(o.getOrderType())
+                && o.getPrice() != null && o.getPrice().signum() > 0) {
+            BigDecimal ref = md != null && md.getYcp() != null && md.getYcp().signum() > 0
+                    ? md.getYcp() : ltp;
+            if (ref.signum() > 0) {
+                BigDecimal devPct = o.getPrice().subtract(ref).abs()
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(ref, 2, java.math.RoundingMode.HALF_UP);
+                if (devPct.compareTo(bondPriceBandPct) > 0)
+                    return reject("Bond clean price " + o.getPrice().toPlainString() + " is " + devPct
+                            + "% away from the reference " + ref.toPlainString()
+                            + " — outside the ±" + bondPriceBandPct + "% price band");
+            }
+        }
 
         ClientAccount acc = accountRepo.findById(o.getAccountId()).orElse(null);
         if (acc == null) return reject("Unknown client account");

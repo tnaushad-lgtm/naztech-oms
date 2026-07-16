@@ -21,4 +21,10 @@ public class Trade {
     private Long quantity;
     @Column(name = "aggressor_side") private String aggressorSide;
     @Column(name = "executed_at")    private LocalDateTime executedAt;
+
+    // ---- fixed income (DSE Bond BRS §1.1.2 / §1.1.8): null for equities ----
+    /** Accrued interest per unit at settlement. Settlement price = price (clean) + accrued. */
+    @Column(name = "accrued_interest") private BigDecimal accruedInterest;
+    /** Yield implied by the traded clean price — shown on trades per the BRS ("displayed on ... Trades Tables"). */
+    @Column(name = "trade_yield")      private BigDecimal tradeYield;
 }

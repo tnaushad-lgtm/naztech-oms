@@ -40,7 +40,9 @@ public final class Dtos {
     public record BondQuote(
             String symbol, BigDecimal faceValue, BigDecimal couponRate, int couponFreq,
             String maturityDate, BigDecimal yield, BigDecimal cleanPrice,
-            BigDecimal accrued, BigDecimal dirtyPrice) {}
+            BigDecimal accrued, BigDecimal dirtyPrice,
+            /** When the trade settles (T+2, or T+1 on the spot market) — the date the accrued is computed to. */
+            String settleDate) {}
 
     /** A natural-language order parsed by the AI Order Bot (parsed for confirmation, not yet placed). */
     public record ParsedOrder(

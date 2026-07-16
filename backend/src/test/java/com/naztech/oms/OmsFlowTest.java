@@ -225,6 +225,58 @@ class OmsFlowTest {
     }
 
     @Test
+    void bond_order_by_yield_fills_and_stamps_settlement_economics() {
+        // TB10Y2034: 8.5% semi-annual, reference ~99.82. An order entered BY YIELD near the coupon
+        // rate converts to a clean price near par (DSE BRS §1.1: submitted with a price, not a yield),
+        // and once it trades, the TRADE carries accrued interest and the implied yield — because
+        // settlement price = clean + accrued is the number that actually changes hands (§1.1.2).
+        Security bond = securityRepo.findBySymbolAndExchangeId("TB10Y2034", dseId()).orElseThrow();
+
+        // A yield-basis BUY: converted to clean price at entry, rests on the book.
+        OrderRequest buy = new OrderRequest(client1().getId(), bond.getId(), "BUY", "LIMIT",
+                "NORMAL", "DAY", null, null, null, 100L, dealerId(),
+                "YIELD", java.math.BigDecimal.valueOf(8.55));
+        OrderService.PlaceResult placed = orderService.place(buy, "dealer1");
+
+        assertThat(placed.risk().pass()).isTrue();
+        assertThat(placed.order().priceBasis()).isEqualTo("YIELD");
+        assertThat(placed.order().orderYield()).isNotNull();
+        // yield ≈ coupon ⇒ clean ≈ par — and inside the ±10% band of the 99.82 reference
+        assertThat(placed.order().price().doubleValue()).isBetween(90.0, 110.0);
+
+        // Give a second client bonds to sell, and cross the book deterministically: a SELL priced
+        // through the resting bid must trade at the passive (bid) price.
+        ClientAccount seller = accountRepo.findByBoId("1201010000002").orElseThrow();
+        portfolioService.applyFill(seller.getId(), bond.getId(), "BUY", 200L, java.math.BigDecimal.valueOf(99.50));
+        long trades0 = tradeRepo.count();
+        OrderRequest sell = new OrderRequest(seller.getId(), bond.getId(), "SELL", "LIMIT",
+                "NORMAL", "DAY", null, java.math.BigDecimal.valueOf(95.00), null, 100L, dealerId());
+        OrderService.PlaceResult crossed = orderService.place(sell, "dealer1");
+
+        assertThat(crossed.risk().pass()).isTrue();
+        assertThat(tradeRepo.count()).isGreaterThan(trades0);
+        var trade = tradeRepo.findAll().stream()
+                .filter(t -> bond.getId().equals(t.getSecurityId()))
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(trade.getAccruedInterest()).as("accrued interest persisted on the bond trade").isNotNull();
+        assertThat(trade.getAccruedInterest().signum()).isGreaterThanOrEqualTo(0);
+        assertThat(trade.getTradeYield()).as("implied yield persisted on the bond trade").isNotNull();
+    }
+
+    @Test
+    void bond_price_outside_the_band_is_rejected() {
+        // BRS §1.1.6 — Reference Price Limits on the clean price. 60.00 against a ~99.82 reference is
+        // 40% away; the circuit breaker must stop it here, not let the venue discover it.
+        Security bond = securityRepo.findBySymbolAndExchangeId("TB10Y2034", dseId()).orElseThrow();
+        OrderRequest req = new OrderRequest(client1().getId(), bond.getId(), "BUY", "LIMIT",
+                "NORMAL", "DAY", null, java.math.BigDecimal.valueOf(60.00), null, 100L, dealerId());
+        OrderService.PlaceResult res = orderService.place(req, "dealer1");
+
+        assertThat(res.risk().pass()).isFalse();
+        assertThat(res.order().rejectReason()).containsIgnoringCase("price band");
+    }
+
+    @Test
     void closed_market_blocks_orders() {
         marketSession.close("DSE", "test");
         try {

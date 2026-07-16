@@ -21,14 +21,17 @@ public class BondController {
         this.bonds = bonds;
     }
 
-    /** GET /api/bonds/{securityId}/quote?basis=YIELD&value=8.5  (or basis=PRICE&value=98.4) */
+    /** GET /api/bonds/{securityId}/quote?basis=YIELD&value=8.5&window=NORMAL  (or basis=PRICE&value=98.4).
+     *  {@code window} selects the settlement basis: NORMAL/BLOCK settle T+2, SPOT settles T+1 —
+     *  and accrued interest is computed to that settlement date, per the DSE BRS. */
     @GetMapping("/{securityId}/quote")
     public BondQuote quote(@PathVariable Long securityId,
                            @RequestParam(defaultValue = "YIELD") String basis,
-                           @RequestParam BigDecimal value) {
+                           @RequestParam BigDecimal value,
+                           @RequestParam(defaultValue = "NORMAL") String window) {
         Security s = securityRepo.findById(securityId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown security"));
         if (!bonds.isBond(s)) throw new IllegalArgumentException(s.getSymbol() + " is not a bond");
-        return bonds.quote(s, basis, value);
+        return bonds.quote(s, basis, value, window);
     }
 }

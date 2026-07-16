@@ -56,10 +56,12 @@ public class ExecutionService {
     private final AuditService audit;
     private final OrderFillApplier fills;
     private final ExecutionStats stats;
+    private final com.naztech.oms.service.BondService bonds;
 
     public ExecutionService(OmsOrderRepo orderRepo, TradeRepo tradeRepo, SecurityRepo securityRepo,
                             PortfolioService portfolio, MarketDataService marketData, StreamService stream,
-                            AuditService audit, OrderFillApplier fills, ExecutionStats stats) {
+                            AuditService audit, OrderFillApplier fills, ExecutionStats stats,
+                            com.naztech.oms.service.BondService bonds) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.securityRepo = securityRepo;
@@ -69,6 +71,7 @@ public class ExecutionService {
         this.audit = audit;
         this.fills = fills;
         this.stats = stats;
+        this.bonds = bonds;
     }
 
     @Transactional
@@ -139,6 +142,7 @@ public class ExecutionService {
         t.setQuantity(qty);
         t.setAggressorSide(o.getSide());
         t.setExecutedAt(LocalDateTime.now());
+        stampBondEconomics(t, o, px, msg);
         tradeRepo.save(t);
 
         if (o.getAccountId() != null) portfolio.applyFill(o.getAccountId(), o.getSecurityId(), o.getSide(), qty, px);
@@ -153,6 +157,32 @@ public class ExecutionService {
         tick.put("side", o.getSide());
         tick.put("ts", t.getExecutedAt().toString());
         stream.publish("trade", tick);
+    }
+
+    /**
+     * Bond trades carry their settlement economics (DSE Bond BRS §1.1.2/§1.1.8): the traded price is
+     * the CLEAN price, and settlement price = clean + accrued interest.
+     *
+     * <p>The BRS says the venue puts Accrued Interest on the Execution Report — FIX tag 159,
+     * {@code AccruedInterestAmt} — and when it does, <b>the venue's figure wins</b>: it knows the real
+     * settlement calendar and coupon schedule, and disagreeing with the exchange about money is a
+     * reconciliation break. When the report carries no tag 159 (our local exchange doesn't), we compute
+     * it ourselves from the instrument's coupon terms at the order's settlement window.
+     */
+    private void stampBondEconomics(Trade t, OmsOrder o, BigDecimal px, Message msg) {
+        Security s = securityRepo.findById(o.getSecurityId()).orElse(null);
+        if (!bonds.isBond(s)) return;
+        String window = o.getTradeWindow() == null ? "NORMAL" : o.getTradeWindow();
+        try {
+            if (msg.isSetField(159)) {                                     // AccruedInterestAmt from the venue
+                t.setAccruedInterest(BigDecimal.valueOf(msg.getDouble(159)));
+            } else {
+                t.setAccruedInterest(bonds.accruedFor(s, window));
+            }
+        } catch (Exception e) {
+            t.setAccruedInterest(bonds.accruedFor(s, window));
+        }
+        t.setTradeYield(bonds.yieldAt(s, px, window));
     }
 
     /** DSE FIX OrdStatus(39) → OMS lifecycle status. */
