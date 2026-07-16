@@ -61,6 +61,9 @@ public class ItchOrderBook {
 
     public int restingOrderCount() { return orders.size(); }
 
+    /** Drop every resting order — used when the venue restarts and the book must be rebuilt from the replay. */
+    public void clear() { orders.clear(); }
+
     /** Best (highest) bid as a raw ITCH price, or -1 if none. */
     public long bestBidRaw() { return best('B', true); }
     /** Best (lowest) ask as a raw ITCH price, or -1 if none. */

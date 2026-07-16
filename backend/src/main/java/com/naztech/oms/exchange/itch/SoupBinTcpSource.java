@@ -54,6 +54,8 @@ public final class SoupBinTcpSource implements ItchSource {
     private volatile Socket socket;
     private volatile Thread reader;
     private volatile boolean endOfSession;
+    /** Set when the venue's sequence rolled back (restart); the gateway clears its books and unsets it. */
+    private volatile boolean sessionReset;
 
     public SoupBinTcpSource(String host, int port, String username, String password, String session)
             throws IOException {
@@ -107,6 +109,18 @@ public final class SoupBinTcpSource implements ItchSource {
                         case SoupBinTcp.LOGIN_ACCEPTED -> {
                             SoupBinTcp.LoginAccepted la = SoupBinTcp.parseLoginAccepted(p.payload());
                             seq = la.nextSequence();
+                            // The venue restarted: same feed, but its sequence has rolled back below
+                            // where we were. Resuming at our old (higher) number would ask for messages
+                            // that no longer exist and the feed would sit silent forever — which is
+                            // exactly the stall we hit when nFIX was bounced. Adopt the server's new
+                            // sequence and rebuild the book from the replay it is about to send.
+                            if (seq < sequencer.expected()) {
+                                log.warn("ITCH SoupBinTCP: session '{}' rolled back to {} (we were at {}) "
+                                                + "— venue restarted; re-syncing the book from scratch",
+                                        la.session(), seq, sequencer.expected());
+                                sequencer.resyncTo(seq);
+                                sessionReset = true;               // tell the gateway to clear stale books
+                            }
                             log.info("ITCH SoupBinTCP: logged in to session '{}', stream starts at {}",
                                     la.session(), seq);
                         }
@@ -207,6 +221,15 @@ public final class SoupBinTcpSource implements ItchSource {
     /** Feed health — gaps seen, gaps recovered, messages given up on. Surfaced on the connectivity page. */
     public ItchSequencer.Health health() {
         return sequencer.health();
+    }
+
+    /** True once (per restart) after the venue's sequence rolled back — the gateway clears its books and consumes it. */
+    public boolean consumeSessionReset() {
+        if (sessionReset) {
+            sessionReset = false;
+            return true;
+        }
+        return false;
     }
 
     @Override

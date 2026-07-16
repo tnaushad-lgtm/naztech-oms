@@ -267,6 +267,14 @@ public class ItchGateway implements MarketDataGateway {
     public void tick() {
         if (!ready || !feedLive || source == null) return;
         synchronized (lock) {
+            // If the venue restarted (its ITCH sequence rolled back), throw away the stale books before
+            // consuming the replay — otherwise resting orders from the previous session linger as
+            // phantom liquidity next to the fresh book. The replay then rebuilds each book from scratch.
+            if (source instanceof SoupBinTcpSource soup && soup.consumeSessionReset()) {
+                log.warn("ITCH: venue restarted — clearing {} books to rebuild from the replay", books.size());
+                for (ItchOrderBook b : books.values()) b.clear();
+                orderToSecurity.clear();
+            }
             for (Itch.Msg m : source.poll()) route(wire(m));
             // Only nudge indices for our own simulator. A live venue sends real index values ([Z]);
             // faking drift on top of them would fight the real feed and mislead the desk.

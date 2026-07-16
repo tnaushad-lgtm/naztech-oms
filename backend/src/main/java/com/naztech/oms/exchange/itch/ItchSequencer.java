@@ -159,6 +159,20 @@ public final class ItchSequencer {
         outstanding = null;
     }
 
+    /**
+     * Adopt a new base sequence after the venue restarted and its numbering rolled back.
+     *
+     * <p>Everything buffered ahead of the old position is meaningless now — it belongs to a stream that
+     * no longer exists — so it is discarded, and the next message at {@code newExpected} is taken as the
+     * fresh start. Not a gap, not a loss: a new session.
+     */
+    public synchronized void resyncTo(long newExpected) {
+        early.clear();
+        expected = newExpected;
+        outstanding = null;
+        gapsDetected = 0;               // the old gaps are from a stream that is gone
+    }
+
     /** What we are still waiting for, or null if the stream is contiguous. */
     private Gap gap() {
         if (early.isEmpty()) {
