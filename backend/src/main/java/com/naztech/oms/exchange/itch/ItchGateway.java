@@ -60,6 +60,8 @@ public class ItchGateway implements MarketDataGateway {
     private final Map<Long, Long> orderToSecurity = new ConcurrentHashMap<>();  // orderNumber → securityId
     private final Map<Long, String> symbols = new ConcurrentHashMap<>();        // securityId → symbol
     private final List<Long> indexIds = new ArrayList<>();
+    /** Trades seen while draining a tick, persisted after the lock is released — see {@link #tick()}. */
+    private final List<PendingTrade> pendingTrades = new ArrayList<>();
     private final Object lock = new Object();
     private final Random rnd = new Random();
     private ItchSource source;
@@ -285,6 +287,7 @@ public class ItchGateway implements MarketDataGateway {
     @Scheduled(fixedDelayString = "${itch.tick-ms:1200}")
     public void tick() {
         if (!ready || !feedLive || source == null) return;
+        List<PendingTrade> flush;
         synchronized (lock) {
             // If the venue restarted (its ITCH sequence rolled back), throw away the stale books before
             // consuming the replay — otherwise resting orders from the previous session linger as
@@ -294,13 +297,20 @@ public class ItchGateway implements MarketDataGateway {
                 for (ItchOrderBook b : books.values()) b.clear();
                 orderToSecurity.clear();
             }
-            for (Itch.Msg m : source.poll()) route(wire(m));
+            for (Itch.Msg m : source.poll()) route(wire(m));   // builds books in-memory, buffers trades
             // Only nudge indices for our own simulator. A live venue sends real index values ([Z]);
             // faking drift on top of them would fight the real feed and mislead the desk.
             if (!isLiveTransport()) driftIndices();
             if (props.isValidate()) validateBooks();
-            snapshotDepth();
+            snapshotDepth();                                   // the book (in-memory) pushed while still under lock
+            flush = pendingTrades.isEmpty() ? List.of() : new ArrayList<>(pendingTrades);
+            pendingTrades.clear();
         }
+        // Persist the trades that built the book OUTSIDE the lock. A reconnect replays the whole day at
+        // once — thousands of trades — and doing those DB writes under the lock is what starved depth()
+        // and the snapshot push (the "No book / waiting for a push" freeze). The books are already
+        // current and pushed above; the last-price/volume/tape catch up here without holding anyone up.
+        for (PendingTrade t : flush) flushTrade(t);
         stream.publish("market", Map.of("type", "itch", "ts", 0));
     }
 
@@ -416,14 +426,25 @@ public class ItchGateway implements MarketDataGateway {
         BigDecimal px = scale(rawPrice);
         BigDecimal bestBid = (b == null || b.bestBidRaw() < 0) ? null : scale(b.bestBidRaw());
         BigDecimal bestAsk = (b == null || b.bestAskRaw() < 0) ? null : scale(b.bestAskRaw());
-        marketData.applyTrade(sid, px, qty, bestBid, bestAsk);
+        // Do NOT write to the DB here: recordTrade runs inside the tick lock, and a replay can carry
+        // thousands of trades. Persisting each one under the lock is what froze depth serving and the
+        // snapshot push during a reconnect. Buffer it; tick() flushes the batch once the lock is free.
+        pendingTrades.add(new PendingTrade(sid, px, qty, bestBid, bestAsk, ts));
+    }
+
+    /** A trade captured under the lock, persisted afterwards. */
+    private record PendingTrade(long sid, BigDecimal px, long qty, BigDecimal bestBid, BigDecimal bestAsk, long ts) {}
+
+    /** Persist one buffered trade and push it to the tape — called after the tick lock is released. */
+    private void flushTrade(PendingTrade t) {
+        marketData.applyTrade(t.sid(), t.px(), t.qty(), t.bestBid(), t.bestAsk());
         Map<String, Object> tick = new LinkedHashMap<>();
-        tick.put("securityId", sid);
-        tick.put("symbol", symbols.getOrDefault(sid, "?"));
-        tick.put("price", px);
-        tick.put("qty", qty);
+        tick.put("securityId", t.sid());
+        tick.put("symbol", symbols.getOrDefault(t.sid(), "?"));
+        tick.put("price", t.px());
+        tick.put("qty", t.qty());
         tick.put("side", "");
-        tick.put("ts", String.valueOf(ts));
+        tick.put("ts", String.valueOf(t.ts()));
         stream.publish("trade", tick);
     }
 
