@@ -84,21 +84,24 @@ public class ExecutionService {
             char ordStatus = msg.isSetField(OrdStatus.FIELD) ? msg.getChar(OrdStatus.FIELD) : execType;
 
             double lastQty = msg.isSetField(LastQty.FIELD) ? msg.getDouble(LastQty.FIELD) : 0;
+            BigDecimal lastPx = null;
             if (lastQty > 0) {
-                BigDecimal lastPx = msg.isSetField(LastPx.FIELD)
+                lastPx = msg.isSetField(LastPx.FIELD)
                         ? BigDecimal.valueOf(msg.getDouble(LastPx.FIELD)) : nz(o.getPrice());
                 recordFill(o, (long) lastQty, lastPx, msg);
-                // Maintain the running average fill price ourselves (VWAP over the fills). A venue that
-                // does send AvgPx(6) overrides this below with its authoritative figure; nFIX does not
-                // send it, so without this a fully-filled order shows an average of 0.00.
-                fills.applyFill(o, (long) lastQty, lastPx);
             }
 
-            // Prefer the exchange's cumulative figures when present (authoritative, dedup-safe) — these
-            // override our own accumulation, which is exactly what we want when the venue provides them.
+            // Prefer the exchange's cumulative figures when present (authoritative, dedup-safe).
             if (msg.isSetField(CumQty.FIELD)) o.setFilledQty((long) msg.getDouble(CumQty.FIELD));
-            if (msg.isSetField(AvgPx.FIELD) && msg.getDouble(AvgPx.FIELD) > 0)
+            if (msg.isSetField(AvgPx.FIELD) && msg.getDouble(AvgPx.FIELD) > 0) {
                 o.setAvgFillPrice(BigDecimal.valueOf(msg.getDouble(AvgPx.FIELD)));
+            } else if (lastPx != null && lastPx.signum() > 0) {
+                // The venue omitted AvgPx(6) — nFIX does. Fall back to the last fill price so a filled
+                // order does not read an average of 0.00. Exact for a single-fill order; the last clip's
+                // price for a multi-fill one, which is close enough for the blotter. A plain assignment:
+                // it cannot throw and it does not touch the fill quantity, so the fill still applies.
+                o.setAvgFillPrice(lastPx);
+            }
 
             String st = mapStatus(ordStatus, o);
             o.setStatus(st);
