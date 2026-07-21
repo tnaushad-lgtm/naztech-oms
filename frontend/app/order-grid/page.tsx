@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Shell } from "@/components/Shell";
 import { ComboBox, ComboItem } from "@/components/ComboBox";
 import { SegGroup } from "@/components/grid/SegGroup";
+import { useLive } from "@/lib/useLive";
 import { get, post } from "@/lib/api";
 import { getSession } from "@/lib/session";
 import { nf, money } from "@/lib/format";
@@ -140,6 +141,37 @@ function confirmed(r: Row): boolean {
 /** Law 4 + the bug this replaces: `risk?.pass !== false` let every UNCHECKED row through. */
 function sendable(r: Row): boolean {
   return filled(r) && confirmed(r) && r.risk?.pass === true && !r.sent?.id;
+}
+
+/**
+ * Colour a venue status by what it MEANS, not by "did the POST succeed".
+ *
+ * PENDING_RISK used to render green, which reads as done when it is the opposite: the order has been
+ * accepted by us and we are still waiting on the exchange. Green must mean the exchange agreed.
+ * In flight is amber, working-on-the-book is cyan, and anything that ended badly is red.
+ */
+function statusTone(s?: string): string {
+  switch ((s || "").toUpperCase()) {
+    case "FILLED":                       return "text-bull font-semibold";
+    case "PARTIALLY_FILLED": case "PARTIAL": return "text-bull";
+    case "OPEN": case "ACCEPTED":        return "text-aurora-cyan";
+    case "REJECTED": case "EXCH_REJECTED": return "text-bear font-semibold";
+    case "CANCELLED": case "EXPIRED":    return "text-ink-400";
+    default:                             return "text-amber-300";   // PENDING_RISK, ROUTING, unknown
+  }
+}
+/** Plain words. "PENDING_RISK" is our internal state name, not something a trader should decode. */
+function statusText(s?: string): string {
+  switch ((s || "").toUpperCase()) {
+    case "PENDING_RISK": return "sending…";
+    case "OPEN":         return "working";
+    case "FILLED":       return "filled";
+    case "PARTIALLY_FILLED": case "PARTIAL": return "part filled";
+    case "REJECTED":     return "rejected";
+    case "CANCELLED":    return "cancelled";
+    case "EXPIRED":      return "expired";
+    default:             return (s || "").toLowerCase().replace(/_/g, " ");
+  }
 }
 
 const num = (s: string): number | null => {
@@ -298,6 +330,55 @@ export default function OrderGridPage() {
       setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, checking: false, sent: { error: e.message || "failed" } } : x)));
     }
   };
+
+  /**
+   * Keep sent rows live.
+   *
+   * POST /api/orders returns the status at the instant of submission, which is almost always the
+   * transient PENDING_RISK — the execution report has not come back from the venue yet. Capturing
+   * that string and never updating it left every sent row frozen on PENDING_RISK for the rest of the
+   * session: three orders that were actually OPEN, FILLED and OPEN at the exchange all read the same,
+   * and a genuinely stuck order looked identical to a working one.
+   *
+   * SSE is the primary channel; the 4s poll is the fallback, because a proxy that buffers event
+   * streams turns a live blotter into a dead one silently. Both stop once every sent row is terminal.
+   */
+  const applyStatus = useCallback((byId: Map<number, string>) => {
+    setRows((rs) => {
+      let changed = false;
+      const next = rs.map((r) => {
+        if (!r.sent?.id) return r;
+        const st = byId.get(r.sent.id);
+        if (st && st !== r.sent.status) { changed = true; return { ...r, sent: { ...r.sent, status: st } }; }
+        return r;
+      });
+      return changed ? next : rs;
+    });
+  }, []);
+
+  useLive((type, data) => {
+    if (type === "order" && data?.id != null && data?.status) {
+      applyStatus(new Map<number, string>([[data.id, data.status]]));
+    }
+  });
+
+  const rowsRef = useRef<Row[]>(rows);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+  useEffect(() => {
+    const TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED", "EXPIRED"]);
+    const t = setInterval(async () => {
+      const pending = rowsRef.current.filter((r) => r.sent?.id && !TERMINAL.has(r.sent.status || ""));
+      if (!pending.length) return;
+      try {
+        const ids = new Set(pending.map((r) => r.sent!.id));
+        const list = await get<any[]>("/api/orders");
+        const m = new Map<number, string>();
+        (list || []).forEach((o: any) => { if (ids.has(o.id)) m.set(o.id, o.status); });
+        if (m.size) applyStatus(m);
+      } catch { /* transient: the next tick retries */ }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [applyStatus]);
 
   const sendMany = async (which: Row[]) => {
     const ready = which.filter(sendable);
@@ -553,7 +634,9 @@ export default function OrderGridPage() {
                   {/* risk — fixed width so a verdict never moves anything */}
                   <span className="w-[130px] shrink-0 truncate text-[11px]" title={r.risk?.reason || ""}>
                     {locked ? (
-                      <span className="text-ink-300">#{r.sent!.id} · <span className={r.sent!.status === "REJECTED" ? "text-bear" : "text-bull"}>{r.sent!.status}</span></span>
+                      <span className="text-ink-300">
+                        #{r.sent!.id} · <span className={statusTone(r.sent!.status)}>{statusText(r.sent!.status)}</span>
+                      </span>
                     ) : r.sent?.error ? <span className="text-bear">✕ {r.sent.error}</span>
                       : r.checking ? <span className="text-ink-300">◐ checking</span>
                       : !filled(r) ? <span className="text-ink-400">◌ incomplete</span>
