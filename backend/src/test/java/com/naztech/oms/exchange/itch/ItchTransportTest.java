@@ -117,7 +117,11 @@ class ItchTransportTest {
         source = new SoupBinTcpSource("127.0.0.1", server.getLocalPort(), "dragon", "pw", "DSE20260714");
 
         assertThat(loggedIn.await(5, TimeUnit.SECONDS)).isTrue();
-        assertThat(resumeAt.get()).as("a fresh connect asks for the next message, not message 1").isZero();
+        // A fresh connect asks for sequence 1 — a FULL replay — not 0 ("only what happens from now").
+        // SoupBinTCP has no snapshot service, so the day's directory messages and the resting book are
+        // only obtainable by replaying from the start; requesting 0 is the "ITCH connects but no data"
+        // symptom. This assertion used to expect 0 and had been failing since connect() was corrected.
+        assertThat(resumeAt.get()).as("a fresh connect asks for a full replay from sequence 1").isEqualTo(1L);
 
         await().atMost(5, TimeUnit.SECONDS).until(() -> source.health().delivered() >= 3);
 
@@ -133,6 +137,77 @@ class ItchTransportTest {
         assertThat(h.healthy()).isTrue();
 
         await().atMost(5, TimeUnit.SECONDS).until(() -> !source.isActive());   // end of session
+    }
+
+    @Test
+    @DisplayName("SoupBinTCP: an outage longer than the old retry budget still recovers — it never gives up")
+    void soupBinReconnectsAfterAnOutageThatOutlastsTheRetryBudget() throws Exception {
+        // The regression: reconnect() used to stop after 10 attempts and set running = false, killing
+        // the reader thread for the life of the JVM. On 2026-07-21 a VPN drop exhausted those ten
+        // attempts 96 seconds before the tunnel came back, and market data stayed dead for the rest of
+        // the session while FIX — which QuickFIX/J retries forever — reconnected on its own.
+        server = new ServerSocket(0);
+        int port = server.getLocalPort();
+        CountDownLatch firstLogin = new CountDownLatch(1);
+
+        Thread venue = new Thread(() -> {
+            try {
+                Socket s = server.accept();
+                DataInputStream in = new DataInputStream(s.getInputStream());
+                SoupBinTcp.decode(in);                       // login request
+                s.getOutputStream().write(SoupBinTcp.loginAccepted("DSE20260721", 1));
+                s.getOutputStream().flush();
+                firstLogin.countDown();
+                s.close();                                   // drop it, like a tunnel going away
+            } catch (Exception ignored) {
+                // assertions below are what fail the test
+            }
+        }, "fake-itch-venue-drop");
+        venue.setDaemon(true);
+        venue.start();
+
+        // 5 ms backoff step, so many attempts happen fast; production still uses 1 s.
+        source = new SoupBinTcpSource("127.0.0.1", port, "dragon", "pw", "DSE20260721", 5);
+        assertThat(firstLogin.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Take the venue away entirely and let the source fail well past the old 10-attempt ceiling.
+        server.close();
+        await().atMost(10, TimeUnit.SECONDS).until(() -> source.reconnectAttempts() > 15);
+
+        // The point of the fix: still trying, not dead.
+        assertThat(source.isActive())
+                .as("the source must keep retrying after an outage longer than the old budget")
+                .isTrue();
+
+        // Bring the venue back on the same port — it must find its way home unaided.
+        ServerSocket revived = new ServerSocket(port);
+        CountDownLatch secondLogin = new CountDownLatch(1);
+        Thread again = new Thread(() -> {
+            try (Socket s = revived.accept()) {
+                DataInputStream in = new DataInputStream(s.getInputStream());
+                SoupBinTcp.decode(in);
+                s.getOutputStream().write(SoupBinTcp.loginAccepted("DSE20260721", 1));
+                s.getOutputStream().flush();
+                secondLogin.countDown();
+                Thread.sleep(300);
+            } catch (Exception ignored) {
+                // as above
+            }
+        }, "fake-itch-venue-revived");
+        again.setDaemon(true);
+        again.start();
+
+        assertThat(secondLogin.await(20, TimeUnit.SECONDS))
+                .as("the source reconnects by itself once the venue is reachable again")
+                .isTrue();
+
+        // Shut the source down while it is CONNECTED, not mid-reconnect. Now that it retries forever,
+        // a source left spinning here will happily dial the port the next test's ServerSocket(0) gets
+        // handed and answer its login — which is exactly how this leaked into a sibling test once.
+        source.close();
+        source = null;
+        revived.close();
+        server = null;                                        // tearDown must not double-close
     }
 
     @Test

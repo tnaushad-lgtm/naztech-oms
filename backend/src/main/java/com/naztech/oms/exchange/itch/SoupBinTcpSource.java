@@ -40,6 +40,10 @@ public final class SoupBinTcpSource implements ItchSource {
     private static final Logger log = LoggerFactory.getLogger(SoupBinTcpSource.class);
     private static final int CONNECT_TIMEOUT_MS = 3_000;
     private static final int MAX_QUEUED = 100_000;
+    /** Ceiling on reconnect backoff. Retries continue at this interval indefinitely — see {@link #reconnect}. */
+    private static final long RECONNECT_MAX_BACKOFF_MS = 15_000;
+    /** Backoff grows by this much per attempt, up to the ceiling. */
+    private static final long RECONNECT_STEP_MS = 1_000;
 
     private final String host;
     private final int port;
@@ -60,14 +64,28 @@ public final class SoupBinTcpSource implements ItchSource {
     private volatile long lastPacketAt;
     /** The venue's session id (from Login Accepted), e.g. DSESIM01 — shown in the header. */
     private volatile String sessionName = "";
+    /** Backoff step for this source; production default, lowered by tests. */
+    private final long reconnectStepMs;
+    /** Consecutive failed reconnects since the last successful connect. */
+    private volatile long reconnectAttempts;
 
     public SoupBinTcpSource(String host, int port, String username, String password, String session)
             throws IOException {
+        this(host, port, username, password, session, RECONNECT_STEP_MS);
+    }
+
+    /**
+     * Test seam: the same source with a shorter reconnect step, so a test can drive many consecutive
+     * failed reconnects in a moment instead of the minute the production backoff would take.
+     */
+    SoupBinTcpSource(String host, int port, String username, String password, String session,
+                     long reconnectStepMs) throws IOException {
         this.host = host;
         this.port = port;
         this.username = username;
         this.password = password;
         this.session = session;
+        this.reconnectStepMs = reconnectStepMs;
         this.sequencer = new ItchSequencer(0, 50_000);
 
         connect();
@@ -76,6 +94,9 @@ public final class SoupBinTcpSource implements ItchSource {
         t.start();
         this.reader = t;
     }
+
+    /** How many reconnects have been attempted since the last successful connect — observable for tests. */
+    long reconnectAttempts() { return reconnectAttempts; }
 
     /**
      * Log in.
@@ -162,24 +183,52 @@ public final class SoupBinTcpSource implements ItchSource {
     /**
      * The connection dropped. Reconnecting is not a workaround here — it <em>is</em> the protocol's
      * recovery: we log back in at the sequence we still want and the server replays the gap.
+     *
+     * <p><b>This retries for as long as the source is running, and never gives up on its own.</b> It
+     * used to stop after 10 attempts and set {@code running = false}, which killed the reader thread
+     * and left the feed dead until someone restarted the JVM. That is the wrong trade for market data:
+     * an outage longer than the retry window is precisely when you most need the feed to come back by
+     * itself, and the OMS keeps trading over FIX either way — so the failure mode was a live order
+     * book priced off frozen data, with no reconnect ever attempted again.
+     *
+     * <p>It was not theoretical. A VPN drop on 2026-07-21 exhausted all ten attempts at 21:25:43 and
+     * the tunnel came back at 21:27 — ninety-six seconds later. The feed stayed down for the rest of
+     * the session while the FIX session, which QuickFIX/J retries indefinitely, reconnected by itself.
+     * That asymmetry is the whole bug: the two links to the same venue had different give-up policies.
+     *
+     * <p>Backoff climbs to {@link #RECONNECT_MAX_BACKOFF_MS} and stays there, and logging thins out
+     * after the first few attempts so an overnight outage does not fill the log with one line per
+     * five seconds. Only a deliberate {@link #close()}, a rejected login, or end-of-session stops it.
      */
     private void reconnect(String why) {
         log.warn("ITCH SoupBinTCP: {} — reconnecting to replay from {}", why, sequencer.expected());
         closeSocket();
-        for (int attempt = 1; running.get() && attempt <= 10; attempt++) {
+        for (long attempt = 1; running.get(); attempt++) {
+            reconnectAttempts = attempt;
             try {
-                Thread.sleep(Math.min(1000L * attempt, 5_000L));
+                Thread.sleep(Math.min(reconnectStepMs * attempt, RECONNECT_MAX_BACKOFF_MS));
+                // close() cannot interrupt a blocking connect, so re-check before starting one —
+                // otherwise a shut-down source can still dial the venue for a further timeout.
+                if (!running.get()) {
+                    break;
+                }
                 connect();
+                log.info("ITCH SoupBinTCP: reconnected after {} attempt(s) — replaying from {}",
+                        attempt, sequencer.expected());
+                reconnectAttempts = 0;
                 return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 running.set(false);
             } catch (IOException e) {
-                log.warn("ITCH SoupBinTCP: reconnect attempt {} failed ({})", attempt, e.toString());
+                // Chatty at first (a transient blip should be visible), then once a minute or so.
+                if (attempt <= 5 || attempt % 12 == 0) {
+                    log.warn("ITCH SoupBinTCP: reconnect attempt {} failed ({}) — still retrying",
+                            attempt, e.toString());
+                }
             }
         }
-        log.error("ITCH SoupBinTCP: could not reconnect — the feed is down");
-        running.set(false);
+        log.info("ITCH SoupBinTCP: reconnect loop stopped because the source was shut down");
     }
 
     /** One ITCH message, in sequence. The sequencer is what decides whether it may be applied yet. */
