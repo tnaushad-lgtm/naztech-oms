@@ -245,7 +245,7 @@ function Group({ name, hint, children }: { name: string; hint: string; children:
  *
  * `onClose` is only supplied when floating; the routed page passes nothing and shows no close.
  */
-export function OrderGridBody({ onClose }: { onClose?: () => void }) {
+export function OrderGridBody({ onClose, compact = false }: { onClose?: () => void; compact?: boolean }) {
   const [secs, setSecs] = useState<Sec[]>([]);
   const [accts, setAccts] = useState<Acct[]>([]);
   const [rows, setRows] = useState<Row[]>([newRow()]);
@@ -258,13 +258,26 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
   const secOf = useCallback((r: Row) => (r.securityId ? byId.get(r.securityId) ?? null : null), [byId]);
   const acctById = useMemo(() => new Map(accts.map((a) => [a.id, a])), [accts]);
 
-  const acctItems: ComboItem[] = useMemo(
-    () => accts.map((a) => ({ id: a.id, primary: a.boId, secondary: a.name })),
-    [accts],
-  );
+  const acctItems: ComboItem[] = useMemo(() => {
+    if (!compact) return accts.map((a) => ({ id: a.id, primary: a.boId, secondary: a.name }));
+    // Compact shows the CLIENT NAME, with the BO in the tooltip. That is only safe because of the
+    // suffix below: 501 of the 506 accounts share a name with another account — "Imran Ahmed" alone
+    // is nine different BO numbers — so a bare name would offer nine identical rows to choose from.
+    // Where a name is unique it stays clean; where it is not, the last four BO digits ride along.
+    const seen = new Map<string, number>();
+    for (const a of accts) seen.set(a.name, (seen.get(a.name) || 0) + 1);
+    return accts.map((a) => ({
+      id: a.id,
+      primary: (seen.get(a.name) || 0) > 1 ? `${a.name} ·${a.boId.slice(-4)}` : a.name,
+      secondary: undefined,
+      extra: `${a.boId} ${a.name}`,          // still searchable by full BO number
+    }));
+  }, [accts, compact]);
   const secItems: ComboItem[] = useMemo(
-    () => secs.map((s) => ({ id: s.securityId, primary: s.symbol, secondary: s.name, extra: s.assetClass })),
-    [secs],
+    () => secs.map((s) => compact
+      ? { id: s.securityId, primary: s.symbol, secondary: undefined, extra: `${s.name} ${s.assetClass}` }
+      : { id: s.securityId, primary: s.symbol, secondary: s.name, extra: s.assetClass }),
+    [secs, compact],
   );
 
   useEffect(() => {
@@ -579,14 +592,15 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
         {/* column header — fixed grid template shared by every row */}
         <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850/95 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-300">
           <span className="w-[4px]" /><span className="w-[16px]" /><span className="w-[22px] text-right">#</span>
-          <span className="w-[210px]">BO / Client</span>
-          <span className="w-[190px]">Instrument</span>
-          <span className="w-[104px]">Side</span>
+          <span className={compact ? "w-[170px]" : "w-[210px]"}>Client</span>
+          <span className={compact ? "w-[120px]" : "w-[190px]"}>Ticker</span>
+          <span className={compact ? "w-[78px]" : "w-[104px]"}>Side</span>
+          {compact && <span className="w-[72px]">Type</span>}
           <span className="w-[74px] text-right">Qty</span>
           <span className="w-[84px] text-right">Price</span>
-          <span className="w-[210px]">Order terms</span>
-          <span className="w-[104px] text-right">Value</span>
-          <span className="w-[130px]">Risk</span>
+          {!compact && <span className="w-[210px]">Order terms</span>}
+          {!compact && <span className="w-[104px] text-right">Value</span>}
+          <span className={compact ? "w-[104px]" : "w-[130px]"}>Risk</span>
           <span className="w-[54px]" />
         </div>
 
@@ -661,7 +675,9 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                   <span className="w-[22px] shrink-0 text-right text-[11px] tabular-nums text-ink-400">{i + 1}</span>
 
                   {/* client — all 13 BO digits always render; family accounts differ in the middle */}
-                  <div className="w-[210px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div className={`${compact ? "w-[170px]" : "w-[210px]"} shrink-0`}
+                       title={acct ? `${acct.boId} · ${acct.name}` : "Client BO account"}
+                       onClick={(e) => e.stopPropagation()}>
                     {locked ? (
                       <span className="text-[12px] text-ink-200">{acct?.boId} · {acct?.name}</span>
                     ) : (
@@ -672,7 +688,9 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                   </div>
 
                   {/* instrument */}
-                  <div className="w-[190px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div className={`${compact ? "w-[120px]" : "w-[190px]"} shrink-0`}
+                       title={sec ? `${sec.symbol} · ${sec.name}` : "Instrument"}
+                       onClick={(e) => e.stopPropagation()}>
                     {locked ? (
                       <span className="text-[12px] text-ink-200">{sec?.symbol}</span>
                     ) : (
@@ -682,11 +700,44 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                   </div>
 
                   {/* side — one click, always visible, never a dropdown */}
-                  <div className="w-[104px] shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <SegGroup label="Side" size="md" segs={SIDE_SEGS} value={r.side} showDigits
-                      unconfirmed={r.sideProv !== "confirmed"} disabled={locked}
-                      onChange={(v) => patch(r.key, { side: v as Row["side"], sideProv: "confirmed" })} />
+                  <div className={`${compact ? "w-[78px]" : "w-[104px]"} shrink-0`} onClick={(e) => e.stopPropagation()}>
+                    {compact ? (
+                      <select
+                        disabled={locked}
+                        value={r.sideProv === "confirmed" ? r.side : ""}
+                        onChange={(e) => patch(r.key, { side: e.target.value as Row["side"], sideProv: "confirmed" })}
+                        className={`w-full rounded bg-transparent px-1 py-0.5 text-[12px] font-bold outline-none focus:bg-white/[0.06] ${
+                          r.sideProv !== "confirmed" ? "text-amber-300 ring-1 ring-dashed ring-amber-400/70"
+                            : r.side === "BUY" ? "text-bull" : "text-bear"}`}>
+                        {/* An empty first option so an unchosen side reads as unchosen, not as BUY. */}
+                        <option value="" className="bg-obsidian-850 text-amber-300">— side —</option>
+                        <option value="BUY" className="bg-obsidian-850 text-bull">BUY</option>
+                        <option value="SELL" className="bg-obsidian-850 text-bear">SELL</option>
+                      </select>
+                    ) : (
+                      <SegGroup label="Side" size="md" segs={SIDE_SEGS} value={r.side} showDigits
+                        unconfirmed={r.sideProv !== "confirmed"} disabled={locked}
+                        onChange={(v) => patch(r.key, { side: v as Row["side"], sideProv: "confirmed" })} />
+                    )}
                   </div>
+
+                  {compact && (
+                    <div className="w-[72px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        disabled={locked} value={r.type}
+                        onChange={(e) => {
+                          const v = e.target.value as Row["type"];
+                          // MARKET makes validity and yield basis meaningless — correct, do not warn.
+                          patch(r.key, v === "MARKET"
+                            ? { type: "MARKET", validity: "DAY", basis: "PRICE", orderYield: null }
+                            : { type: v });
+                        }}
+                        className="w-full rounded bg-transparent px-1 py-0.5 text-[11px] font-semibold text-ink-100 outline-none focus:bg-white/[0.06]">
+                        <option value="LIMIT" className="bg-obsidian-850">LMT</option>
+                        <option value="MARKET" className="bg-obsidian-850">MKT</option>
+                      </select>
+                    </div>
+                  )}
 
                   {/* qty — type=text so arrow keys navigate rows instead of decrementing the value */}
                   <input value={r.qty ?? ""} disabled={locked} inputMode="decimal"
@@ -709,6 +760,7 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                   </div>
 
                   {/* order terms — always spelled out; defaults quiet, changes bright */}
+                  {!compact && (
                   <span className="flex w-[210px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap">
                     {terms.map((f, k) => (
                       <span key={k} title={f.title} className={`text-[11px] ${f.c}`}>
@@ -717,13 +769,16 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                       </span>
                     ))}
                   </span>
+                  )}
 
+                  {!compact && (
                   <span className="w-[104px] shrink-0 text-right text-[12px] tabular-nums text-ink-100">
                     {value ? money(value) : ""}
                   </span>
+                  )}
 
                   {/* risk — fixed width so a verdict never moves anything */}
-                  <span className="w-[130px] shrink-0 truncate text-[11px]" title={r.risk?.reason || ""}>
+                  <span className={`${compact ? "w-[104px]" : "w-[130px]"} shrink-0 truncate text-[11px]`} title={r.risk?.reason || ""}>
                     {locked ? (
                       <span className="text-ink-300">
                         #{r.sent!.id} · <span className={statusTone(r.sent!.status)}>{statusText(r.sent!.status)}</span>
@@ -751,7 +806,7 @@ export function OrderGridBody({ onClose }: { onClose?: () => void }) {
                     to someone who already knows this screen — a trader meeting it for the first time
                     sees "NORMAL SPOT BLOCK ODD-LOT FOREIGN" and has no way to learn that those are
                     settlement markets rather than order types. The label is not decoration. */}
-                {isLit && !locked && (
+                {isLit && !locked && !compact && (
                   <div className="flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-aurora-cyan/10 bg-obsidian-950/25 px-2 py-1.5 pl-[46px]">
                     <span className="-ml-3 select-none text-ink-500">╰</span>
 

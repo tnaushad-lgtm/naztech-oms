@@ -55,14 +55,15 @@ export function OrderGridLauncher() {
       <FloatingPanel
         id="order-grid"
         title="Order Grid"
-        subtitle="multi-order entry"
+        subtitle="quick multi-order entry"
         open={open}
         onClose={() => setOpen(false)}
-        initial={{ x: 90, y: 96, w: 1400, h: 520 }}
-        minW={900}
-        minH={280}
+        initial={{ x: 140, y: 120, w: 900, h: 340 }}
+        minW={620}
+        minH={200}
       >
-        <OrderGridBody onClose={() => setOpen(false)} />
+        {/* compact: client name, side, ticker, MKT/LMT, price, qty — identifiers live in tooltips */}
+        <OrderGridBody onClose={() => setOpen(false)} compact />
       </FloatingPanel>
     </>
   );
