@@ -10,7 +10,7 @@ import { saveSession } from "@/lib/session";
 
 const DEMO = [
   { u: "investor1", label: "Investor (Client)", desc: "The public — view portfolio, place own orders, ask AI" },
-  { u: "dealer1", label: "Dealer (Broker staff)", desc: "Trade & manage orders for clients" },
+  { u: "dealer1", label: "Trader (Broker staff)", desc: "Trade & manage orders for clients" },
   { u: "rms", label: "RMS Manager", desc: "Risk limits & alerts" },
   { u: "exchadmin", label: "Exchange Admin", desc: "Control plane" },
 ];

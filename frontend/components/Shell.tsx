@@ -30,6 +30,23 @@ const NAV = [
   { href: "/admin/fix", label: "FIX Monitor", icon: "M4 5h16v14H4z M7 9l2 2-2 2 M12 13h5" },
 ];
 
+/**
+ * What a role is called on screen.
+ *
+ * The stored role is DEALER, and the codebase treats DEALER and TRADER as one tier — RiskService
+ * even looks up the limit for an order's dealerId under the scope "TRADER". But in Bangladeshi
+ * brokerage usage "dealer" specifically means PROPRIETARY trading, the house dealing on its own
+ * account, which here is the separate "Dragon Security Proprietary" client account. The person
+ * entering orders for clients is a trader, and that is what Dragon and the other houses call them.
+ * The database keeps DEALER; only the label changes, because renaming the role would ripple through
+ * seed data, risk-limit scopes and the load-test user filter for no user-visible gain.
+ */
+function roleLabel(role?: string | null): string {
+  if (!role) return "";
+  if (role.toUpperCase() === "DEALER") return "TRADER";
+  return role.replace(/_/g, " ");
+}
+
 export function Shell({
   children,
   connected,
@@ -90,7 +107,7 @@ export function Shell({
         <div className="mt-auto glass-soft p-3">
           <div className="text-[11px] text-ink-400">Signed in as</div>
           <div className="text-sm font-semibold text-ink-100 truncate">{session?.displayName}</div>
-          <div className="mt-0.5 text-[11px] text-ink-500">{session?.role?.replace(/_/g, " ")}</div>
+          <div className="mt-0.5 text-[11px] text-ink-500">{roleLabel(session?.role)}</div>
           {session?.brokerName && (
             <div className="text-[11px] text-aurora-cyan/80 truncate">{session.brokerName}</div>
           )}

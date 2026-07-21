@@ -147,15 +147,28 @@ const num = (s: string): number | null => {
 };
 
 /**
- * A named group of controls on the qualifier band. The name is permanent, not focus-revealed: a
- * trader learning the screen must be able to tell which set of pills is the order type and which is
- * the settlement market, and hovering every group to find out is not learning, it is guessing.
+ * A named group of controls on the qualifier band.
+ *
+ * The name is permanent, not focus-revealed: a trader learning the screen must be able to tell which
+ * set of pills is the order type and which is the settlement market, and hovering each group to find
+ * out is not learning, it is guessing.
+ *
+ * The label is also drawn in a different VISUAL REGISTER from the values it names — cyan-blue, bold,
+ * letterspaced, on its own tinted plate, inside a bordered box that encloses the whole group. An
+ * earlier version set the label in the same small grey as the unselected pills, which left the eye
+ * to work out that "MARKET" was a heading while "NORMAL SPOT BLOCK" beside it were choices. Label and
+ * value must never be separable only by knowing which is which.
  */
 function Group({ name, hint, children }: { name: string; hint: string; children: React.ReactNode }) {
   return (
-    <span className="flex items-center gap-1.5" title={hint}>
-      <span className="select-none text-[9px] uppercase tracking-[0.1em] text-ink-600">{name}</span>
-      {children}
+    <span
+      title={hint}
+      className="flex items-stretch overflow-hidden rounded-md border border-aurora-cyan/25 bg-obsidian-950/40"
+    >
+      <span className="flex select-none items-center border-r border-aurora-cyan/25 bg-aurora-cyan/[0.12] px-2 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">
+        {name}
+      </span>
+      <span className="flex items-center gap-1 px-1.5 py-0.5">{children}</span>
     </span>
   );
 }
@@ -188,12 +201,20 @@ export default function OrderGridPage() {
       try {
         setAccts((await get<Acct[]>(s?.brokerId ? `/api/accounts?brokerId=${s.brokerId}` : "/api/accounts")) || []);
       } catch {}
-      setRows([newRow()]);
-      setLit((r) => r);
+      // Light the first row explicitly. Creating the row and hoping a later effect lights it does
+      // not work: the effect only fires while `lit` is null, and by then `lit` holds the key of the
+      // throwaway row from the initial useState — a key no row has any more. The result was a grid
+      // whose entire second line never appeared until the trader happened to click a row.
+      const first = newRow();
+      setRows([first]);
+      setLit(first.key);
     })();
   }, []);
 
-  useEffect(() => { if (!lit && rows[0]) setLit(rows[0].key); }, [rows, lit]);
+  // Safety net: if the lit key ever stops matching a live row, light the first one.
+  useEffect(() => {
+    if (rows.length && !rows.some((r) => r.key === lit)) setLit(rows[0].key);
+  }, [rows, lit]);
 
   // F2 toggles audit mode — 22px rows, band suppressed, for checking a batch before Send All.
   useEffect(() => {
@@ -555,8 +576,8 @@ export default function OrderGridPage() {
                     sees "NORMAL SPOT BLOCK ODD-LOT FOREIGN" and has no way to learn that those are
                     settlement markets rather than order types. The label is not decoration. */}
                 {isLit && !locked && (
-                  <div className="flex min-h-[30px] flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1.5 pl-[46px]">
-                    <span className="-ml-3 text-ink-700">╰</span>
+                  <div className="flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-aurora-cyan/10 bg-obsidian-950/25 px-2 py-1.5 pl-[46px]">
+                    <span className="-ml-3 select-none text-ink-700">╰</span>
 
                     {bond && (
                       <Group name="Price basis" hint="Bonds may be entered as a clean price or as a yield (DSE BRS §1.1)">
