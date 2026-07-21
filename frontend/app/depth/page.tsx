@@ -7,6 +7,7 @@ import { useLive } from "@/lib/useLive";
 import { useDepth } from "@/lib/useDepth";
 import { nf, nfInt } from "@/lib/format";
 import { bookStats, Depth, DepthCurve, FullLadder, ImbalanceBar, Stat } from "@/components/DepthAnalytics";
+import { startOrder } from "@/lib/orderIntent";
 
 type Row = { securityId: number; symbol: string; name: string; ltp: number; assetClass: string; changePct?: number };
 
@@ -181,7 +182,13 @@ export default function DepthPage() {
                   <div className="panel-title mb-1.5">
                     Order book — {Math.max(depth!.bids?.length || 0, depth!.asks?.length || 0)} levels a side
                   </div>
-                  <FullLadder depth={depth!} changed={changed} />
+                  <FullLadder
+                    depth={depth!}
+                    changed={changed}
+                    // The ladder's price cells have always been buttons accepting onPickPrice; this
+                    // page just never passed one, so they looked clickable and did nothing.
+                    onPickPrice={(price) => sel && startOrder({ securityId: sel.securityId, price })}
+                  />
                 </div>
               </>
             )}

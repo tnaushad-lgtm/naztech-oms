@@ -245,7 +245,12 @@ function Group({ name, hint, children }: { name: string; hint: string; children:
  *
  * `onClose` is only supplied when floating; the routed page passes nothing and shows no close.
  */
-export function OrderGridBody({ onClose, compact = false }: { onClose?: () => void; compact?: boolean }) {
+export function OrderGridBody({ onClose, compact = false, seed }: {
+  onClose?: () => void;
+  compact?: boolean;
+  /** "Trade this" from another screen — see lib/orderIntent. Side is never seeded, only price. */
+  seed?: { securityId: number; price?: number | null; side?: "BUY" | "SELL"; nonce?: number } | null;
+}) {
   const [secs, setSecs] = useState<Sec[]>([]);
   const [accts, setAccts] = useState<Acct[]>([]);
   const [rows, setRows] = useState<Row[]>([newRow()]);
@@ -287,13 +292,13 @@ export function OrderGridBody({ onClose, compact = false }: { onClose?: () => vo
       try {
         setAccts((await get<Acct[]>(s?.brokerId ? `/api/accounts?brokerId=${s.brokerId}` : "/api/accounts")) || []);
       } catch {}
-      // Light the first row explicitly. Creating the row and hoping a later effect lights it does
-      // not work: the effect only fires while `lit` is null, and by then `lit` holds the key of the
-      // throwaway row from the initial useState — a key no row has any more. The result was a grid
-      // whose entire second line never appeared until the trader happened to click a row.
-      const first = newRow();
-      setRows([first]);
-      setLit(first.key);
+      // Deliberately does NOT reset rows here.
+      //
+      // It used to do `setRows([newRow()])` after the fetches, which raced the "trade this" seed:
+      // securities arriving triggered the seed effect, which filled a row, and this line then threw
+      // that row away and replaced it with an empty one — so clicking a price on the depth ladder
+      // opened the panel with nothing in it. useState already starts with one row, and the safety
+      // net below lights it, so there is nothing left for this to do.
     })();
   }, []);
 
@@ -301,6 +306,41 @@ export function OrderGridBody({ onClose, compact = false }: { onClose?: () => vo
   useEffect(() => {
     if (rows.length && !rows.some((r) => r.key === lit)) setLit(rows[0].key);
   }, [rows, lit]);
+
+  /**
+   * Absorb a "trade this" intent from another screen. It lands in the first row that has no
+   * instrument yet, or a new row if every row is spoken for — never overwriting work in progress.
+   * Price arrives as `defaulted`, so it still renders as inherited rather than as a decision.
+   */
+  useEffect(() => {
+    if (!seed?.securityId) return;
+    const sec = byId.get(seed.securityId);
+    if (!sec) return;
+    setRows((rs) => {
+      const idx = rs.findIndex((r) => !r.securityId && !r.sent?.id);
+      const fill = (r: Row): Row => ({
+        ...r,
+        securityId: sec.securityId,
+        symbolText: sec.symbol,
+        price: seed.price ?? sec.ltp ?? null,
+        priceProv: "defaulted",
+        side: seed.side ?? r.side,
+        sideProv: seed.side ? "confirmed" : r.sideProv,
+        basis: isBond(sec) ? r.basis : "PRICE",
+        risk: null, sent: null,
+      });
+      if (idx >= 0) {
+        const next = [...rs];
+        next[idx] = fill(next[idx]);
+        setLit(next[idx].key);
+        return next;
+      }
+      const r = fill(newRow());
+      setLit(r.key);
+      return [...rs, r];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce, seed?.securityId, byId]);
 
   // F2 toggles audit mode — 22px rows, band suppressed, for checking a batch before Send All.
   useEffect(() => {

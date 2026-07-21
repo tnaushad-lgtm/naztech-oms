@@ -15,6 +15,7 @@ import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { FloatingPanel } from "./FloatingPanel";
+import { ORDER_INTENT, OrderIntent } from "@/lib/orderIntent";
 
 const OrderGridBody = dynamic(
   () => import("./grid/OrderGridBody").then((m) => m.OrderGridBody),
@@ -23,7 +24,20 @@ const OrderGridBody = dynamic(
 
 export function OrderGridLauncher() {
   const [open, setOpen] = useState(false);
+  // `nonce` makes two clicks on the SAME price still register as two intents.
+  const [seed, setSeed] = useState<(OrderIntent & { nonce: number }) | null>(null);
   const pathname = usePathname();
+
+  useEffect(() => {
+    const onIntent = (e: Event) => {
+      const d = (e as CustomEvent<OrderIntent>).detail;
+      if (!d?.securityId) return;
+      setSeed({ ...d, nonce: Date.now() });
+      setOpen(true);
+    };
+    window.addEventListener(ORDER_INTENT, onIntent as EventListener);
+    return () => window.removeEventListener(ORDER_INTENT, onIntent as EventListener);
+  }, []);
 
   // Ctrl+Shift+O — a chord, deliberately. A bare key would fire while typing a ticker.
   useEffect(() => {
@@ -63,7 +77,7 @@ export function OrderGridLauncher() {
         minH={200}
       >
         {/* compact: client name, side, ticker, MKT/LMT, price, qty — identifiers live in tooltips */}
-        <OrderGridBody onClose={() => setOpen(false)} compact />
+        <OrderGridBody onClose={() => setOpen(false)} compact seed={seed} />
       </FloatingPanel>
     </>
   );
