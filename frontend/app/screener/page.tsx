@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "@/components/Shell";
+import { Highlight } from "@/components/Highlight";
 import { get } from "@/lib/api";
 import { useLive } from "@/lib/useLive";
 import { getLists, toggleSymbol, createList, Watchlist } from "@/lib/watchlists";
@@ -120,8 +121,8 @@ export default function Screener() {
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.securityId} className="border-t border-line/[0.1] hover:bg-surface/[0.05]">
-                  <td className="px-3 py-2 font-semibold text-ink-100">{r.symbol}</td>
-                  <td className="px-3 py-2 text-ink-400">{r.sector || "—"}</td>
+                  <td className="px-3 py-2 font-semibold text-ink-100"><Highlight text={r.symbol} q={q} /></td>
+                  <td className="px-3 py-2 text-ink-400"><Highlight text={r.sector || "—"} q={q} /></td>
                   <td className="px-3 py-2"><span className="chip bg-surface/[0.1] text-ink-500">{assetLabel(r.assetClass)}</span></td>
                   <td className="px-3 py-2 text-right tnum text-ink-200">{nf(r.ltp)}</td>
                   <td className={`px-3 py-2 text-right tnum font-semibold ${dirColor(r.changePct)}`}>{pct(r.changePct)}</td>

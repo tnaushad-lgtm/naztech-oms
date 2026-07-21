@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Highlight } from "./Highlight";
 
 export type ComboItem = {
   id: number;
@@ -49,20 +50,6 @@ function rank(item: ComboItem, q: string): number {
   if (s.includes(q)) return 5;                            // mid-name
   if (e.includes(q)) return 6;                            // sector / asset class / anything else
   return -1;
-}
-
-/** Split `text` on the first case-insensitive occurrence of `q` so the match can be marked. */
-function mark(text: string, q: string) {
-  if (!q) return <>{text}</>;
-  const i = text.toLowerCase().indexOf(q);
-  if (i < 0) return <>{text}</>;
-  return (
-    <>
-      {text.slice(0, i)}
-      <mark className="rounded-[2px] bg-amber-300/80 px-[1px] text-obsidian-950">{text.slice(i, i + q.length)}</mark>
-      {text.slice(i + q.length)}
-    </>
-  );
 }
 
 export function ComboBox({
@@ -197,9 +184,9 @@ export function ComboBox({
                   i === active ? "bg-aurora-indigo/25 text-ink-100" : "text-ink-200 hover:bg-white/5"
                 } disabled:opacity-40`}
               >
-                <span className="font-semibold tnum">{mark(r.item.primary, r.hits)}</span>
+                <span className="font-semibold tnum"><Highlight text={r.item.primary} q={r.hits} /></span>
                 {r.item.secondary && (
-                  <span className="truncate text-[11.5px] text-ink-300">{mark(r.item.secondary, r.hits)}</span>
+                  <span className="truncate text-[11.5px] text-ink-300"><Highlight text={r.item.secondary} q={r.hits} /></span>
                 )}
               </button>
             ))
