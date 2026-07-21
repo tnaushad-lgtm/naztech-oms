@@ -15,6 +15,7 @@ const NAV = [
   { href: "/dashboard", label: "My Dashboard", icon: "M4 4h7v7H4z M13 4h7v4h-7z M13 11h7v9h-7z M4 14h7v6H4z" },
   { href: "/terminal", label: "Trader Terminal", icon: "M3 13h4l2 5 4-12 2 7h5" },
   { href: "/order-bot", label: "AI Order Bot", icon: "M12 3a4 4 0 0 1 4 4v3a4 4 0 0 1-8 0V7a4 4 0 0 1 4-4z M5 11a7 7 0 0 0 14 0 M12 18v3" },
+  { href: "/order-grid", label: "Order Grid", icon: "M3 5h18v14H3z M3 10h18 M3 15h18 M9 5v14 M15 5v14" },
   { href: "/workspace", label: "Trading Desk", icon: "M4 4h7v16H4z M13 4h7v7h-7z M13 13h7v7h-7z" },
   { href: "/screener", label: "Market Screener", icon: "M3 5h18M6 12h12M10 19h4" },
   { href: "/heatmap", label: "Market Heatmap", icon: "M3 3h8v8H3z M13 3h8v5h-8z M13 10h8v11h-8z M3 13h8v8H3z" },
