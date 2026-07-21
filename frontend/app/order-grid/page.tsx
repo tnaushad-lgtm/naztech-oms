@@ -37,7 +37,10 @@ import { getSession } from "@/lib/session";
 import { nf, money } from "@/lib/format";
 
 type Sec = { securityId: number; symbol: string; name: string; ltp: number; assetClass: string; category?: string };
-type Acct = { id: number; name: string; boId: string; brokerId: number; status?: string };
+type Acct = {
+  id: number; name: string; boId: string; brokerId: number; status?: string;
+  cashBalance?: number; buyingPower?: number;
+};
 type Risk = { pass: boolean; reason?: string; score?: number; flags?: string[] };
 
 /** unset = never given a value · defaulted = we assumed one · confirmed = the trader chose it. */
@@ -138,9 +141,38 @@ function filled(r: Row): boolean {
 function confirmed(r: Row): boolean {
   return r.accountProv === "confirmed" && r.sideProv === "confirmed";
 }
+/**
+ * Combinations the venue would take but that mean nothing, or mean something the trader did not
+ * intend. Caught at entry rather than at the exchange, because a rejection that arrives from nFIX
+ * thirty seconds later costs a trader their place in the queue and tells them far less.
+ *
+ * Note the backend does NOT check these — OrderService.setValidity simply uppercases whatever it is
+ * given — so without this the contradiction goes out on the wire.
+ */
+function conflicts(r: Row, sec?: Sec | null): string[] {
+  const out: string[] = [];
+  if (r.type === "MARKET" && r.validity !== "DAY") {
+    out.push(`A market order fills immediately, so ${r.validity} has nothing to be good till`);
+  }
+  if (r.type === "MARKET" && r.basis === "YIELD") {
+    out.push("A yield is a price instruction; it cannot be combined with a market order");
+  }
+  if (r.window === "ODD_LOT" && sec) {
+    // Every DSE equity currently has a market lot of 1, so an odd lot is a contradiction in terms.
+    out.push(`${sec.symbol} trades in single shares, so there is no odd lot — use the normal market`);
+  }
+  if (r.window === "BLOCK" && r.qty && r.price && r.qty * r.price < 500000) {
+    out.push("Block market has a Tk 5,00,000 floor — below it the trade belongs in the normal market");
+  }
+  if (r.basis === "YIELD" && sec && !isBond(sec)) {
+    out.push(`${sec.symbol} is not a debt instrument, so it cannot be entered on a yield basis`);
+  }
+  return out;
+}
+
 /** Law 4 + the bug this replaces: `risk?.pass !== false` let every UNCHECKED row through. */
-function sendable(r: Row): boolean {
-  return filled(r) && confirmed(r) && r.risk?.pass === true && !r.sent?.id;
+function sendable(r: Row, sec?: Sec | null): boolean {
+  return filled(r) && confirmed(r) && conflicts(r, sec).length === 0 && r.risk?.pass === true && !r.sent?.id;
 }
 
 /**
@@ -198,7 +230,7 @@ function Group({ name, hint, children }: { name: string; hint: string; children:
       title={hint}
       className="flex items-stretch overflow-hidden rounded-md border border-aurora-cyan/25 bg-obsidian-950/40"
     >
-      <span className="flex select-none items-center border-r border-aurora-cyan/25 bg-aurora-cyan/[0.12] px-2 text-[10px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">
+      <span className="flex select-none items-center border-r border-aurora-cyan/25 bg-aurora-cyan/[0.12] px-2 text-[12px] font-bold uppercase tracking-[0.12em] text-aurora-cyan">
         {name}
       </span>
       <span className="flex items-center gap-1 px-1.5 py-0.5">{children}</span>
@@ -216,6 +248,7 @@ export default function OrderGridPage() {
   const [toast, setToast] = useState("");
 
   const byId = useMemo(() => new Map(secs.map((s) => [s.securityId, s])), [secs]);
+  const secOf = useCallback((r: Row) => (r.securityId ? byId.get(r.securityId) ?? null : null), [byId]);
   const acctById = useMemo(() => new Map(accts.map((a) => [a.id, a])), [accts]);
 
   const acctItems: ComboItem[] = useMemo(
@@ -272,6 +305,17 @@ export default function OrderGridPage() {
   const removeRow = (key: string) =>
     setRows((rs) => (rs.length === 1 ? [newRow()] : rs.filter((r) => r.key !== key)));
 
+  /**
+   * Drop rows that have been sent. Once an order is at the venue this screen has nothing left to say
+   * about it — its life is tracked in the blotter on the Trader Terminal — and leaving it here just
+   * crowds the next batch and makes the ready/held counts harder to read. Never touches unsent work.
+   */
+  const clearSent = () =>
+    setRows((rs) => {
+      const keep = rs.filter((r) => !r.sent?.id);
+      return keep.length ? keep : [newRow()];
+    });
+
   const pickSecurity = (key: string, id: number | null) => {
     const sec = id ? byId.get(id) : null;
     setRows((rs) =>
@@ -321,7 +365,7 @@ export default function OrderGridPage() {
   });
 
   const sendRow = async (r: Row) => {
-    if (!sendable(r)) return;
+    if (!sendable(r, secOf(r))) return;
     setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, checking: true } : x)));
     try {
       const res = await post<any>("/api/orders", body(r));
@@ -384,7 +428,7 @@ export default function OrderGridPage() {
   }, [applyStatus]);
 
   const sendMany = async (which: Row[]) => {
-    const ready = which.filter(sendable);
+    const ready = which.filter((r) => sendable(r, secOf(r)));
     const held = which.length - ready.length;
     if (!ready.length) { setToast(`Nothing sent — ${held} row(s) unconfirmed, incomplete or blocked.`); return; }
     setBusy(true); setToast("");
@@ -447,11 +491,11 @@ export default function OrderGridPage() {
       const v = px * (r.qty || 0);
       if (r.side === "BUY") buy += v; else sell += v;
       if (r.sent?.id) sent++;
-      else if (sendable(r)) ready++;
+      else if (sendable(r, secOf(r))) ready++;
       else if (filled(r)) held++;
     }
     return { buy, sell, net: buy - sell, ready, held, sent };
-  }, [rows, byId]);
+  }, [rows, byId, secOf]);
 
   const selCount = rows.filter((r) => r.sel).length;
   const H = audit ? "h-[22px]" : "h-[28px]";
@@ -485,6 +529,13 @@ export default function OrderGridPage() {
               {audit ? "✓ Review mode" : "Review"}
             </button>
             <button onClick={() => addRow()} className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-200 hover:bg-white/5">+ Row</button>
+            <button
+              disabled={!totals.sent}
+              onClick={clearSent}
+              title="Remove rows already sent. Their live status is in the blotter on the Trader Terminal — keeping them here only crowds the next batch."
+              className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-200 disabled:opacity-40 hover:bg-white/5">
+              Clear sent ({totals.sent})
+            </button>
             <button disabled={busy || !selCount} onClick={() => sendMany(rows.filter((r) => r.sel))}
               className="rounded-lg border border-aurora-indigo/40 bg-aurora-indigo/15 px-3 py-1.5 text-[12px] text-ink-100 disabled:opacity-40">
               Send selected
@@ -543,6 +594,7 @@ export default function OrderGridPage() {
             const px = r.type === "MARKET" ? sec?.ltp || 0 : r.price || 0;
             const value = px * (r.qty || 0);
             const blocked = r.risk?.pass === false;
+            const rowConflicts = conflicts(r, sec);
 
             // ORDER TERMS. Every term is always spelled out, so a trader learning the screen can read
             // what the order actually is without opening anything. Revised from an earlier version
@@ -581,7 +633,7 @@ export default function OrderGridPage() {
                 className={`border-b border-line/40 transition-colors ${
                   blocked ? "bg-bear/[0.06]"
                     // In review mode a row that will NOT send is the thing worth seeing, so tint it.
-                    : audit && !r.sent?.id && filled(r) && !sendable(r) ? "bg-amber-400/[0.07]"
+                    : audit && !r.sent?.id && filled(r) && !sendable(r, sec) ? "bg-amber-400/[0.07]"
                     : isLit ? "bg-white/[0.035]" : "hover:bg-white/[0.02]"
                 } ${locked ? "opacity-60" : ""}`}>
 
@@ -672,6 +724,7 @@ export default function OrderGridPage() {
                     ) : r.sent?.error ? <span className="text-bear">✕ {r.sent.error}</span>
                       : r.checking ? <span className="text-ink-300">◐ checking</span>
                       : !filled(r) ? <span className="text-ink-400">◌ incomplete</span>
+                      : rowConflicts.length ? <span className="text-bear" title={rowConflicts.join(" · ")}>✕ {rowConflicts[0]}</span>
                       : !confirmed(r) ? <span className="text-amber-400">⚠ unconfirmed</span>
                       : r.risk === null ? <span className="text-ink-300">○ unchecked</span>
                       : r.risk.pass ? <span className="text-bull">✓ pass {nf(r.risk.score || 0, 0)}</span>
@@ -679,7 +732,7 @@ export default function OrderGridPage() {
                   </span>
 
                   <span className="flex w-[54px] shrink-0 justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button disabled={!sendable(r)} onClick={() => sendRow(r)}
+                    <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)}
                       className="rounded border border-line px-1 text-[10px] text-ink-300 disabled:opacity-25 hover:bg-white/5">↵</button>
                     <button onClick={() => removeRow(r.key)}
                       className="rounded border border-line px-1 text-[10px] text-ink-500 hover:text-bear">✕</button>
@@ -709,7 +762,13 @@ export default function OrderGridPage() {
 
                     <Group name="Order type" hint="Limit = your price or better. Market = fill at the best available price.">
                       <SegGroup label="Order type" segs={TYPE_SEGS} value={r.type} defaultValue="LIMIT" showDigits
-                        onChange={(v) => patch(r.key, { type: v as Row["type"] })} />
+                        onChange={(v) =>
+                          patch(r.key, v === "MARKET"
+                            // A market order fills at once: GTC/GTD/GTS and a yield basis become
+                            // meaningless, so correct them here rather than reject the order later.
+                            ? { type: "MARKET", validity: "DAY", basis: "PRICE", orderYield: null }
+                            : { type: v as Row["type"] })
+                        } />
                       {r.type.startsWith("STOP") && (
                         <input value={r.stop ?? ""} inputMode="decimal" placeholder="trigger"
                           onChange={(e) => patch(r.key, { stop: num(e.target.value) })}
@@ -727,14 +786,40 @@ export default function OrderGridPage() {
                         onChange={(v) => patch(r.key, { validity: v })} />
                     </Group>
 
-                    {sec && (
-                      <span className="ml-auto flex items-center gap-2 text-[11px] text-ink-400">
-                        <span>LTP <span className="tabular-nums text-ink-100">{nf(sec.ltp)}</span></span>
-                        {r.priceProv === "defaulted" && r.type !== "MARKET" && (
-                          <span className="italic text-amber-300/80">price seeded from LTP</span>
-                        )}
-                      </span>
-                    )}
+                    <span className="ml-auto flex items-center gap-3 text-[12px] text-ink-400">
+                      {/* Buying power of the CHOSEN client. Without it a trader sizes an order blind
+                          and finds out it was too big only when the RMS rejects it. Shown against the
+                          order's own value so the comparison needs no arithmetic. */}
+                      {acct && (
+                        <span
+                          title={`${acct.name} — cash ${money(acct.cashBalance ?? 0)}`}
+                          className="flex items-baseline gap-1.5 rounded-md border border-line px-2 py-0.5"
+                        >
+                          <span className="text-[11px] uppercase tracking-wider text-ink-400">Buying power</span>
+                          <span className={`text-[14px] font-semibold tabular-nums ${
+                            r.side === "BUY" && value > (acct.buyingPower ?? 0) ? "text-bear" : "text-bull"
+                          }`}>
+                            {money(acct.buyingPower ?? 0)}
+                          </span>
+                          {r.side === "BUY" && value > 0 && (
+                            <span className={`text-[11px] tabular-nums ${
+                              value > (acct.buyingPower ?? 0) ? "text-bear" : "text-ink-400"
+                            }`}>
+                              · after {money((acct.buyingPower ?? 0) - value)}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      {sec && (
+                        <span className="flex items-baseline gap-1.5">
+                          <span className="text-[11px] uppercase tracking-wider text-ink-400">LTP</span>
+                          <span className="text-[15px] font-semibold tabular-nums text-ink-100">{nf(sec.ltp)}</span>
+                        </span>
+                      )}
+                      {sec && r.priceProv === "defaulted" && r.type !== "MARKET" && (
+                        <span className="text-[11px] italic text-amber-300/80">price seeded from LTP</span>
+                      )}
+                    </span>
                   </div>
                 )}
               </div>
