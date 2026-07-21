@@ -10,8 +10,8 @@
  * exact and prefix matches above mid-string ones, so typing "GP" reaches Grameenphone rather than
  * every company with a "gp" buried in it.
  *
- * Deliberately dependency-free and keyboard-complete: ↑/↓ to move, Enter to commit, Esc to abandon,
- * Tab to commit-and-move-on. A trader working a list should never need the mouse.
+ * Deliberately dependency-free and keyboard-complete: ↑/↓ to move, Enter to commit, Esc to abandon.
+ * Tab moves on WITHOUT committing — see the note on the Tab handler below.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -182,7 +182,7 @@ export function ComboBox({
           className="absolute left-0 z-50 mt-1 max-h-64 w-[320px] overflow-auto rounded-lg border border-line bg-obsidian-850 shadow-2xl"
         >
           {results.length === 0 ? (
-            <div className="px-3 py-2 text-[11px] text-ink-500">{emptyLabel}</div>
+            <div className="px-3 py-2 text-[11px] text-ink-300">{emptyLabel}</div>
           ) : (
             results.map((r, i) => (
               <button
@@ -194,18 +194,18 @@ export function ComboBox({
                 onMouseDown={(e) => e.preventDefault()}   // keep focus in the input so blur does not fire first
                 onClick={() => commit(r.item)}
                 className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-[12px] ${
-                  i === active ? "bg-aurora-indigo/25 text-ink-100" : "text-ink-300 hover:bg-white/5"
+                  i === active ? "bg-aurora-indigo/25 text-ink-100" : "text-ink-200 hover:bg-white/5"
                 } disabled:opacity-40`}
               >
                 <span className="font-semibold tnum">{mark(r.item.primary, r.hits)}</span>
                 {r.item.secondary && (
-                  <span className="truncate text-[11px] text-ink-500">{mark(r.item.secondary, r.hits)}</span>
+                  <span className="truncate text-[11.5px] text-ink-300">{mark(r.item.secondary, r.hits)}</span>
                 )}
               </button>
             ))
           )}
           {results.length >= maxResults && (
-            <div className="border-t border-line px-3 py-1 text-[10px] text-ink-600">
+            <div className="border-t border-line px-3 py-1 text-[10px] text-ink-400">
               showing first {maxResults} — keep typing to narrow
             </div>
           )}

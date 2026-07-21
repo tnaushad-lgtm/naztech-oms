@@ -4,23 +4,24 @@
  * LANTERN — multi-row order entry for a trader working a list of client instructions.
  *
  * Twenty orders are a ledger, and exactly one of them is lit. Every order is a 28px line carrying
- * only what a trader transcribes from an instruction — client, ticker, side, quantity, price — plus
- * a FLAGS column that prints nothing at all when the order is ordinary. The row being edited grows a
- * second 28px band holding the enumerated fields as inline segmented controls, the bond maths, and
- * the search strip. Moving the lantern is -28px on one row and +28px on the next, so the list height
- * never changes and no row below ever shifts under the trader's eye.
+ * what a trader transcribes from an instruction — client, ticker, side, quantity, price — plus an
+ * ORDER TERMS column spelling out the rest. The row being edited grows a second band holding the
+ * enumerated fields as labelled segmented controls and the bond maths. Moving the lantern is -28px on
+ * one row and +28px on the next, so the list height never changes and no row below shifts.
  *
- * Four laws, each of which exists because breaking it loses money:
+ * Four laws, each of which exists because breaking it loses money or loses the reader:
  *
- *  1. THE BAND HIDES CONTROLS, NEVER VALUES. A sleeping row still shows its window, validity, basis
- *     and stop as FLAGS chips. Line two only restores the means to edit them.
- *  2. DEFAULTS ARE SILENT, EXCEPTIONS ARE LOUD. NORMAL and DAY render as zero ink, so a batch of
- *     twenty ordinary orders shows an empty FLAGS column and the single BLOCK or GTC is the only
- *     mark on the page.
- *  3. A DEFAULT IS NOT A DECISION. Every field carries provenance — unset, defaulted, or confirmed —
- *     and a defaulted value never renders in the visual language of a chosen one. A defaulted client
- *     or side is dashed amber and blocks Send. This is what stops forty pasted rows from being
- *     forty confident orders to one wrong BO account.
+ *  1. THE BAND HIDES CONTROLS, NEVER VALUES. A sleeping row still states its type, market, validity
+ *     and basis in the terms column. Line two only restores the means to edit them.
+ *  2. DEFAULTS ARE QUIET, EXCEPTIONS ARE LOUD — and NOTHING IS INVISIBLE. An earlier version printed
+ *     nothing at all for default values, which scans beautifully for an expert and leaves a newcomer
+ *     unable to tell an unset field from a defaulted one. Defaults are dim lower-case, changes are
+ *     bright and hued. Nothing on this screen is dimmer than ink-400: it is the screen the desk lives
+ *     on, and a value that must be squinted at is a value that will be misread.
+ *  3. A DEFAULT IS NOT A DECISION, where no safe default exists. Client and side carry provenance and
+ *     block the send until chosen — that is what stops forty pasted rows becoming forty confident
+ *     orders to one wrong BO account. Price does not block; seeding from LTP is what every terminal
+ *     does, and warning on it every time only teaches people to click past warnings.
  *  4. NOTHING MOVES THAT THE TRADER DID NOT MOVE. Risk verdicts never change a row's height; a
  *     blocked row washes red inside a fixed-width column. A forty-row paste resolving over eight
  *     seconds produces zero layout shift.
@@ -165,7 +166,7 @@ function Group({ name, hint, children }: { name: string; hint: string; children:
       title={hint}
       className="flex items-stretch overflow-hidden rounded-md border border-aurora-cyan/25 bg-obsidian-950/40"
     >
-      <span className="flex select-none items-center border-r border-aurora-cyan/25 bg-aurora-cyan/[0.12] px-2 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">
+      <span className="flex select-none items-center border-r border-aurora-cyan/25 bg-aurora-cyan/[0.12] px-2 text-[10px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">
         {name}
       </span>
       <span className="flex items-center gap-1 px-1.5 py-0.5">{children}</span>
@@ -376,9 +377,9 @@ export default function OrderGridPage() {
       <div className="relative flex h-full min-h-0 flex-col gap-2 p-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-obsidian-900/60 px-3 py-2">
-          <div className="text-[11px] text-ink-500">
+          <div className="text-[11px] text-ink-300">
             <span className="uppercase tracking-wider text-ink-400">Multi-order entry</span>
-            <span className="ml-2 text-ink-600">
+            <span className="ml-2 text-ink-400">
               paste from Excel · <kbd className="rounded bg-white/10 px-1">Enter</kbd> commits &amp; opens next ·{" "}
               <kbd className="rounded bg-white/10 px-1">F2</kbd> audit view
             </span>
@@ -386,7 +387,7 @@ export default function OrderGridPage() {
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {selCount > 0 && (
               <div className="flex items-center gap-1 rounded-lg border border-line px-2 py-1">
-                <span className="text-[10px] uppercase tracking-wider text-ink-500">{selCount} sel</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-300">{selCount} sel</span>
                 <SegGroup label="Bulk side" segs={SIDE_SEGS} value="" defaultValue=""
                   onChange={(v) => bulk({ side: v as Row["side"], sideProv: "confirmed" })} />
                 <SegGroup label="Bulk window" segs={WINDOW_SEGS} value="" defaultValue=""
@@ -410,7 +411,7 @@ export default function OrderGridPage() {
         </div>
 
         {/* column header — fixed grid template shared by every row */}
-        <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850/95 px-2 py-1.5 text-[9px] uppercase tracking-[0.12em] text-ink-600">
+        <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850/95 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-300">
           <span className="w-[4px]" /><span className="w-[16px]" /><span className="w-[22px] text-right">#</span>
           <span className="w-[210px]">BO / Client</span>
           <span className="w-[190px]">Instrument</span>
@@ -444,24 +445,24 @@ export default function OrderGridPage() {
             const terms: { t: string; c: string; title: string }[] = [];
             terms.push(
               r.type === DEF.type
-                ? { t: "limit", c: "text-ink-600", title: "Order type: Limit (default)" }
+                ? { t: "limit", c: "text-ink-400", title: "Order type: Limit (default)" }
                 : { t: r.type === "STOP_LIMIT" ? "STOP-LIMIT" : r.type, c: "text-aurora-cyan font-semibold", title: `Order type: ${r.type}` },
             );
             terms.push(
               r.window === DEF.window
-                ? { t: "normal", c: "text-ink-600", title: "Market: Normal / public market (default)" }
+                ? { t: "normal", c: "text-ink-400", title: "Market: Normal / public market (default)" }
                 : { t: r.window.replace("_", "-"), c: "text-aurora-teal font-semibold", title: `Market: ${r.window}` },
             );
             terms.push(
               r.validity === DEF.validity
-                ? { t: "day", c: "text-ink-600", title: "Validity: Day (default)" }
+                ? { t: "day", c: "text-ink-400", title: "Validity: Day (default)" }
                 : { t: r.validity, c: "text-aurora-violet font-semibold", title: `Validity: ${r.validity}` },
             );
             if (bond)
               terms.push(
                 r.basis === "YIELD"
                   ? { t: `yield ${nf(r.orderYield || 0, 3)}%`, c: "text-aurora-cyan font-semibold", title: "Entered on yield basis" }
-                  : { t: "price basis", c: "text-ink-600", title: "Entered on clean-price basis (default)" },
+                  : { t: "price basis", c: "text-ink-400", title: "Entered on clean-price basis (default)" },
               );
             if (r.type.startsWith("STOP") && r.stop)
               terms.push({ t: `stop ${nf(r.stop, 2)}`, c: "text-aurora-teal font-semibold", title: `Stop trigger ${nf(r.stop, 2)}` });
@@ -485,12 +486,12 @@ export default function OrderGridPage() {
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, sel: e.target.checked } : x)))} />
 
-                  <span className="w-[22px] shrink-0 text-right text-[10px] tabular-nums text-ink-600">{i + 1}</span>
+                  <span className="w-[22px] shrink-0 text-right text-[11px] tabular-nums text-ink-400">{i + 1}</span>
 
                   {/* client — all 13 BO digits always render; family accounts differ in the middle */}
                   <div className="w-[210px] shrink-0" onClick={(e) => e.stopPropagation()}>
                     {locked ? (
-                      <span className="text-[11px] text-ink-400">{acct?.boId} · {acct?.name}</span>
+                      <span className="text-[12px] text-ink-200">{acct?.boId} · {acct?.name}</span>
                     ) : (
                       <ComboBox items={acctItems} value={r.accountId} placeholder="BO or name…"
                         className={r.accountProv !== "confirmed" ? "rounded ring-1 ring-dashed ring-amber-400/70" : ""}
@@ -501,7 +502,7 @@ export default function OrderGridPage() {
                   {/* instrument */}
                   <div className="w-[190px] shrink-0" onClick={(e) => e.stopPropagation()}>
                     {locked ? (
-                      <span className="text-[11px] text-ink-400">{sec?.symbol}</span>
+                      <span className="text-[12px] text-ink-200">{sec?.symbol}</span>
                     ) : (
                       <ComboBox items={secItems} value={r.securityId} placeholder="ticker or name…"
                         onChange={(id) => pickSecurity(r.key, id)} />
@@ -538,26 +539,26 @@ export default function OrderGridPage() {
                   {/* order terms — always spelled out; defaults quiet, changes bright */}
                   <span className="flex w-[210px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap">
                     {terms.map((f, k) => (
-                      <span key={k} title={f.title} className={`text-[10px] ${f.c}`}>
-                        {k > 0 && <span className="mr-1 text-ink-800">·</span>}
+                      <span key={k} title={f.title} className={`text-[11px] ${f.c}`}>
+                        {k > 0 && <span className="mr-1 text-ink-500">·</span>}
                         {f.t}
                       </span>
                     ))}
                   </span>
 
-                  <span className="w-[104px] shrink-0 text-right text-[11px] tabular-nums text-ink-300">
+                  <span className="w-[104px] shrink-0 text-right text-[12px] tabular-nums text-ink-100">
                     {value ? money(value) : ""}
                   </span>
 
                   {/* risk — fixed width so a verdict never moves anything */}
-                  <span className="w-[130px] shrink-0 truncate text-[10px]" title={r.risk?.reason || ""}>
+                  <span className="w-[130px] shrink-0 truncate text-[11px]" title={r.risk?.reason || ""}>
                     {locked ? (
                       <span className="text-ink-300">#{r.sent!.id} · <span className={r.sent!.status === "REJECTED" ? "text-bear" : "text-bull"}>{r.sent!.status}</span></span>
                     ) : r.sent?.error ? <span className="text-bear">✕ {r.sent.error}</span>
-                      : r.checking ? <span className="text-ink-500">◐ checking</span>
-                      : !filled(r) ? <span className="text-ink-700">◌ incomplete</span>
+                      : r.checking ? <span className="text-ink-300">◐ checking</span>
+                      : !filled(r) ? <span className="text-ink-400">◌ incomplete</span>
                       : !confirmed(r) ? <span className="text-amber-400">⚠ unconfirmed</span>
-                      : r.risk === null ? <span className="text-ink-500">○ unchecked</span>
+                      : r.risk === null ? <span className="text-ink-300">○ unchecked</span>
                       : r.risk.pass ? <span className="text-bull">✓ pass {nf(r.risk.score || 0, 0)}</span>
                       : <span className="text-bear">✕ {r.risk.reason}</span>}
                   </span>
@@ -577,7 +578,7 @@ export default function OrderGridPage() {
                     settlement markets rather than order types. The label is not decoration. */}
                 {isLit && !locked && (
                   <div className="flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-aurora-cyan/10 bg-obsidian-950/25 px-2 py-1.5 pl-[46px]">
-                    <span className="-ml-3 select-none text-ink-700">╰</span>
+                    <span className="-ml-3 select-none text-ink-500">╰</span>
 
                     {bond && (
                       <Group name="Price basis" hint="Bonds may be entered as a clean price or as a yield (DSE BRS §1.1)">
@@ -612,8 +613,8 @@ export default function OrderGridPage() {
                     </Group>
 
                     {sec && (
-                      <span className="ml-auto flex items-center gap-2 text-[10px] text-ink-600">
-                        <span>LTP <span className="tabular-nums text-ink-300">{nf(sec.ltp)}</span></span>
+                      <span className="ml-auto flex items-center gap-2 text-[11px] text-ink-400">
+                        <span>LTP <span className="tabular-nums text-ink-100">{nf(sec.ltp)}</span></span>
                         {r.priceProv === "defaulted" && r.type !== "MARKET" && (
                           <span className="italic text-amber-300/80">price seeded from LTP</span>
                         )}
@@ -628,13 +629,13 @@ export default function OrderGridPage() {
 
         {/* totals */}
         <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line bg-obsidian-900/60 px-3 py-2 text-[11px]">
-          <span className="text-ink-600">Rows <span className="tabular-nums text-ink-200">{rows.length}</span></span>
+          <span className="text-ink-400">Rows <span className="tabular-nums text-ink-200">{rows.length}</span></span>
           <span className="text-bull">Ready <span className="tabular-nums">{totals.ready}</span></span>
           {totals.held > 0 && <span className="text-amber-400">Held <span className="tabular-nums">{totals.held}</span></span>}
           {totals.sent > 0 && <span className="text-ink-300">Sent <span className="tabular-nums">{totals.sent}</span></span>}
-          <span className="ml-auto text-ink-600">Buy <span className="tabular-nums text-bull">{money(totals.buy)}</span></span>
-          <span className="text-ink-600">Sell <span className="tabular-nums text-bear">{money(totals.sell)}</span></span>
-          <span className="text-ink-600">Net <span className={`tabular-nums ${totals.net >= 0 ? "text-bull" : "text-bear"}`}>{money(Math.abs(totals.net))}</span></span>
+          <span className="ml-auto text-ink-400">Buy <span className="tabular-nums text-bull">{money(totals.buy)}</span></span>
+          <span className="text-ink-400">Sell <span className="tabular-nums text-bear">{money(totals.sell)}</span></span>
+          <span className="text-ink-400">Net <span className={`tabular-nums ${totals.net >= 0 ? "text-bull" : "text-bear"}`}>{money(Math.abs(totals.net))}</span></span>
         </div>
 
         {/* toast — absolutely positioned so a message never costs a pixel of layout */}

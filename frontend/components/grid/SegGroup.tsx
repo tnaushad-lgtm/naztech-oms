@@ -116,7 +116,7 @@ export function SegGroup({
             : isDefault || !s.hue
               ? "bg-white/[0.10] text-ink-100 ring-1 ring-inset ring-white/20"
               : `${HUE[s.hue]} ring-1 ring-inset`
-          : "text-ink-600 font-medium bg-transparent hover:text-ink-300 hover:bg-white/[0.05]";
+          : "text-ink-400 font-medium bg-transparent hover:text-ink-100 hover:bg-white/[0.08]";
 
         return (
           <button
