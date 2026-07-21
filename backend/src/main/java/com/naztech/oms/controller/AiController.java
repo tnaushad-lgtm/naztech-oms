@@ -128,6 +128,25 @@ public class AiController {
     }
 
     /**
+     * Rebuild the security embedding index from the database.
+     *
+     * <p>The index was built once, on {@code ApplicationReadyEvent}, and never again. Every security
+     * added after start-up — a bond seeded for testing, a fresh nFIX import, a new listing — was
+     * therefore invisible to search for the life of the process, and no amount of reloading the
+     * browser helped: {@code search()} iterates the vector map, so a security with no vector cannot
+     * be returned at all. The instrument was in the watchlist and tradable, yet "no close matches".
+     *
+     * <p>Embedding ~300 instruments takes a few seconds, so this runs synchronously and returns the
+     * new count — a reindex you cannot confirm is a reindex you will not trust.
+     */
+    @PostMapping("/reindex")
+    public Map<String, Object> reindex() {
+        int before = search.indexed();
+        search.buildIndex();
+        return Map.of("reindexed", true, "before", before, "indexed", search.indexed());
+    }
+
+    /**
      * "Where do I find market depth?" — semantic search over the OMS's own screens, so a dealer can
      * ask for a feature in their own words instead of hunting the sidebar. Same on-prem model as the
      * security search: no key required, nothing leaves the exchange.

@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -127,6 +128,35 @@ class OmsFlowTest {
         List<AiHit> hits = search.search("squre pharmaceutical company", 25, 5);
         assertThat(hits).isNotEmpty();
         assertThat(hits.get(0).symbol()).isEqualTo("SQURPHARMA");
+    }
+
+    /**
+     * The index must cover every security in the database, not just those present when the process
+     * started. The index was built once on ApplicationReadyEvent and never rebuilt, so any instrument
+     * added afterwards — a seeded bond, an nFIX re-import, a new listing — was permanently unfindable:
+     * search iterates the vector map, so no vector means no hit, however exact the query. It showed up
+     * as "No close matches" for a ticker sitting right there in the watchlist.
+     */
+    @Test
+    void reindex_covers_securities_added_after_startup() {
+        search.buildIndex();
+        assertThat(search.indexed()).isEqualTo((int) securityRepo.count());
+    }
+
+    /** Bonds are findable by what they are, not just by ticker — the yield ticket is reached this way. */
+    @Test
+    void bonds_are_findable_by_semantic_search() {
+        search.buildIndex();
+        List<com.naztech.oms.entity.Security> bonds = securityRepo.findAll().stream()
+                .filter(s -> s.getAssetClass() != null
+                        && (s.getAssetClass().contains("BOND") || s.getAssetClass().equals("SUKUK")))
+                .toList();
+        assumeTrue(!bonds.isEmpty(), "no debt instruments seeded — run db/bond_tickers_seed.sql");
+
+        List<AiHit> hits = search.search("government treasury bond", 25, 20);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anyMatch(h -> h.assetClass() != null
+                && (h.assetClass().contains("BOND") || h.assetClass().equals("SUKUK")));
     }
 
     @Test
