@@ -58,3 +58,13 @@ FIX-session-down hardening (reject orders cleanly when the session is down); a *
 module** (roles, GUI-vs-transaction permissions, parent→child→sub-child limit inheritance, on-behalf
 delegation, per-BO/per-ticker restrictions); advanced order types (Market-at-best, FOK/FAK, disclosed
 "drip" qty, block trades); and the DSE-observed feature backlog (separate prompts).
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+This repository uses OpenWiki for recurring code documentation. Start with `openwiki/quickstart.md`, then follow its links to architecture, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+
+The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+
+<!-- OPENWIKI:END -->
