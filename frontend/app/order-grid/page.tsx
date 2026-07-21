@@ -356,7 +356,10 @@ export default function OrderGridPage() {
     });
   }, []);
 
-  useLive((type, data) => {
+  // `connected` drives the Live/Offline badge in the header. Every other screen passes it through;
+  // this one did not, so the badge read "Offline" permanently regardless of the real stream state —
+  // maximally misleading on the screen where you go to ask why an order is not moving.
+  const { connected } = useLive((type, data) => {
     if (type === "order" && data?.id != null && data?.status) {
       applyStatus(new Map<number, string>([[data.id, data.status]]));
     }
@@ -454,7 +457,7 @@ export default function OrderGridPage() {
   const H = audit ? "h-[22px]" : "h-[28px]";
 
   return (
-    <Shell title="Order Grid">
+    <Shell title="Order Grid" connected={connected}>
       <div className="relative flex h-full min-h-0 flex-col gap-2 p-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-obsidian-900/60 px-3 py-2">
