@@ -9,6 +9,7 @@ import { AiAdvisor } from "./AiAdvisor";
 import { SessionBadge } from "./SessionBadge";
 import { AlertToaster } from "./AlertToaster";
 import { RoutingBadge } from "./RoutingBadge";
+import { OrderGridLauncher } from "./OrderGridLauncher";
 import { getSession, clearSession, Session } from "@/lib/session";
 
 const NAV = [
@@ -127,6 +128,7 @@ export function Shell({
             <SessionBadge />
             <RoutingBadge />
             <ThemeSwitcher />
+            <OrderGridLauncher />
             <div className="hidden sm:flex items-center gap-2 rounded-full border border-line/[0.1] bg-surface/[0.05] px-3 py-1.5">
               <span className={`h-2 w-2 rounded-full ${connected ? "bg-bull animate-pulseDot" : "bg-bear"}`} />
               <span className="text-[11px] font-medium text-ink-300">
