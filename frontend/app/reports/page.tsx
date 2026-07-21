@@ -25,6 +25,16 @@ function downloadCsv(name: string, headers: string[], rows: (string | number)[][
 
 export default function Reports() {
   const session = typeof window !== "undefined" ? getSession() : null;
+  /**
+   * Rendered after mount, never during SSR.
+   *
+   * The header printed `new Date().toLocaleString()` straight into JSX, so the server stamped one
+   * time and the client stamped another a moment later — the text could never match and React threw
+   * a hydration error (#425) on every load of this page. The session name has the same problem: it
+   * comes from localStorage, so it is null on the server by construction.
+   */
+  const [stamp, setStamp] = useState("");
+  useEffect(() => { setStamp(new Date().toLocaleString("en-GB")); }, []);
   const [report, setReport] = useState("tradebook");
   const [accounts, setAccounts] = useState<any[]>([]);
   const [accountId, setAccountId] = useState<number | null>(null);
@@ -94,7 +104,9 @@ export default function Reports() {
         <div className="flex items-center justify-between border-b border-line/[0.1] px-4 py-3">
           <div>
             <div className="text-sm font-bold text-ink-100">{REPORTS.find((x) => x.k === report)?.label}</div>
-            <div className="text-[11px] text-ink-500">{session?.brokerName} · Naztech OMS · as of {new Date().toLocaleString("en-GB")}</div>
+            <div className="text-[11px] text-ink-500" suppressHydrationWarning>
+              {stamp ? `${session?.brokerName ?? ""} · Naztech OMS · as of ${stamp}` : "Naztech OMS"}
+            </div>
           </div>
         </div>
 
