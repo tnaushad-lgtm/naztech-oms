@@ -465,7 +465,7 @@ export default function OrderGridPage() {
             <span className="uppercase tracking-wider text-ink-400">Multi-order entry</span>
             <span className="ml-2 text-ink-400">
               paste from Excel · <kbd className="rounded bg-white/10 px-1">Enter</kbd> commits &amp; opens next ·{" "}
-              <kbd className="rounded bg-white/10 px-1">F2</kbd> audit view
+              <kbd className="rounded bg-white/10 px-1">F2</kbd> review before sending
             </span>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -478,9 +478,11 @@ export default function OrderGridPage() {
                   onChange={(v) => bulk({ window: v })} />
               </div>
             )}
-            <button onClick={() => setAudit((a) => !a)}
-              className={`rounded-lg border px-3 py-1.5 text-[12px] ${audit ? "border-aurora-cyan/50 bg-aurora-cyan/15 text-aurora-cyan" : "border-line text-ink-300 hover:bg-white/5"}`}>
-              Audit
+            <button
+              onClick={() => setAudit((a) => !a)}
+              title="Compact review: shrink every row and hide the editing band so a long batch fits on one screen, and anything not ready to send is called out. Also F2."
+              className={`rounded-lg border px-3 py-1.5 text-[12px] ${audit ? "border-aurora-cyan/60 bg-aurora-cyan/20 font-semibold text-aurora-cyan" : "border-line text-ink-300 hover:bg-white/5"}`}>
+              {audit ? "✓ Review mode" : "Review"}
             </button>
             <button onClick={() => addRow()} className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-200 hover:bg-white/5">+ Row</button>
             <button disabled={busy || !selCount} onClick={() => sendMany(rows.filter((r) => r.sel))}
@@ -493,6 +495,28 @@ export default function OrderGridPage() {
             </button>
           </div>
         </div>
+
+        {/* Review mode banner. Compacting rows is a 6px change that is invisible on a short list —
+            the mode looked broken when pressed with three rows on screen. What a trader actually
+            wants before Send All is the answer to "what will and will not go", so say it outright. */}
+        {audit && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-aurora-cyan/30 bg-aurora-cyan/[0.07] px-3 py-2 text-[12px]">
+            <span className="font-semibold uppercase tracking-wider text-aurora-cyan">Review</span>
+            <span className="text-bull">{totals.ready} will send</span>
+            {totals.held > 0 && (
+              <span className="text-amber-300">
+                {totals.held} held — needs client &amp; side confirmed, or blocked by risk
+              </span>
+            )}
+            {rows.filter((r) => !r.sent?.id && !filled(r)).length > 0 && (
+              <span className="text-ink-400">
+                {rows.filter((r) => !r.sent?.id && !filled(r)).length} incomplete
+              </span>
+            )}
+            {totals.sent > 0 && <span className="text-ink-300">{totals.sent} already sent</span>}
+            <span className="ml-auto text-ink-400">rows compacted · editing band hidden · F2 to exit</span>
+          </div>
+        )}
 
         {/* column header — fixed grid template shared by every row */}
         <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850/95 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-300">
@@ -554,7 +578,12 @@ export default function OrderGridPage() {
             return (
               <div key={r.key}
                 onClick={() => !audit && setLit(r.key)}
-                className={`border-b border-line/40 transition-colors ${blocked ? "bg-bear/[0.06]" : isLit ? "bg-white/[0.035]" : "hover:bg-white/[0.02]"} ${locked ? "opacity-60" : ""}`}>
+                className={`border-b border-line/40 transition-colors ${
+                  blocked ? "bg-bear/[0.06]"
+                    // In review mode a row that will NOT send is the thing worth seeing, so tint it.
+                    : audit && !r.sent?.id && filled(r) && !sendable(r) ? "bg-amber-400/[0.07]"
+                    : isLit ? "bg-white/[0.035]" : "hover:bg-white/[0.02]"
+                } ${locked ? "opacity-60" : ""}`}>
 
                 {/* ---------------- line 1 : the ledger line ---------------- */}
                 <div className={`flex items-center gap-2 px-2 ${H}`}>
