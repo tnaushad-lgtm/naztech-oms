@@ -1,10 +1,10 @@
 ---
-type: Reference
-title: Operations index
-description: Index page for operational runbooks and operator-facing troubleshooting docs.
-tags: [openwiki, operations, oms]
+type: Documentation Index
+title: "Operations"
+description: "Files and subdirectories in Operations."
 ---
 
-# Operations
+# Files
 
-- [Connectivity operations](/openwiki/operations/exchange-connectivity.md) — admin status endpoint, reconnect semantics, and troubleshooting FIX vs ITCH issues.
+- [Connectivity operations](exchange-connectivity.md) - Operational guide for the OMS connectivity control plane. Covers the admin status payload, reconnect behavior, raw FIX log access, and the practical meaning of ITCH liveness fields.
+- [Troubleshooting runbook](troubleshooting.md) - Operator-focused troubleshooting checklist for FIX/ITCH connectivity and market-data replay issues.

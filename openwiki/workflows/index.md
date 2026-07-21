@@ -1,8 +1,7 @@
 ---
-type: Reference
-title: Workflows
-description: Index of documented workflows.
-tags: [index]
+type: Documentation Index
+title: "Workflows"
+description: "Files and subdirectories in Workflows."
 ---
 
-# Workflows
+

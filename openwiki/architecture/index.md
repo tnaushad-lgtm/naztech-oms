@@ -1,13 +1,11 @@
 ---
-type: Reference
-title: Architecture index
-description: High-level architecture entry points.
-tags: [architecture, index]
+type: Documentation Index
+title: "Architecture"
+description: "Files and subdirectories in Architecture."
 ---
 
-# Architecture
+# Files
 
-- [Architecture overview](overview.md)
-- [Exchange connectivity](exchange-connectivity.md)
-- [Technology stack](technology-stack.md)
-
+- [Exchange connectivity](exchange-connectivity.md) - Architecture page for the OMS exchange seam. Explains how FIX order routing, ITCH market data, replay recovery, and live transport health fit together, and why the backend treats the venue as the source of truth in live modes.
+- [Architecture overview](overview.md) - High-level map of the OMS runtime: UI, Spring Boot backend, market-data/AI service, and MySQL storage, with emphasis on the FIX/ITCH connectivity seam.
+- [Technology stack](technology-stack.md) - Documents the runtime components (frontend, Spring Boot backend, market-data/AI service, MySQL) and their responsibilities.
