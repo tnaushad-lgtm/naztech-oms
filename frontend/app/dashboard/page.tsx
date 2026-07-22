@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Shell } from "@/components/Shell";
 import { WidgetChrome } from "@/components/widgets/WidgetChrome";
 import { WIDGETS, WIDGET_MAP, DEFAULT_LAYOUT, PRESETS, layoutFromIds } from "@/components/widgets/registry";
+import { Highlight } from "@/components/Highlight";
 import { DashboardProvider, useDash } from "@/lib/dashboardData";
 import { getSession } from "@/lib/session";
 
@@ -112,11 +113,23 @@ function Board() {
   const reset = () => { expandedH.current = {}; setCollapsed(new Set()); setLayout(buildDefault()); };
 
   const activeIds = useMemo(() => new Set(layout.map((i) => i.i)), [layout]);
+
+  /**
+   * Library search. The catalogue has outgrown the eye: four columns of similarly-shaped buttons is
+   * a list you scan, not a list you search, and finding one chart among two dozen takes longer than
+   * placing it. Matching runs over title, subtitle, category AND keywords, so "graph", "pie" or
+   * "pnl" all reach the right widget without knowing what we happened to name it.
+   */
+  const [wq, setWq] = useState("");
   const grouped = useMemo(() => {
+    const q = wq.trim().toLowerCase();
+    const hit = (w: (typeof WIDGETS)[number]) =>
+      !q || `${w.title} ${w.subtitle || ""} ${w.category} ${w.keywords || ""}`.toLowerCase().includes(q);
     const g: Record<string, typeof WIDGETS> = {};
-    WIDGETS.forEach((w) => { (g[w.category] = g[w.category] || []).push(w); });
+    WIDGETS.filter(hit).forEach((w) => { (g[w.category] = g[w.category] || []).push(w); });
     return g;
-  }, []);
+  }, [wq]);
+  const matchCount = useMemo(() => Object.values(grouped).reduce((n, l) => n + l.length, 0), [grouped]);
 
   const header = (
     <div className="flex items-center gap-2">
@@ -158,9 +171,25 @@ function Board() {
         {menuOpen && (
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
             className="glass mb-4 p-4">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
               <div className="panel-title">Widget Library — click to add</div>
-              <button onClick={() => setMenuOpen(false)} className="ghost-btn py-1 text-xs">Done</button>
+              <div className="relative ml-2 min-w-[240px] flex-1 sm:max-w-[380px]">
+                <input
+                  autoFocus
+                  value={wq}
+                  onChange={(e) => setWq(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setWq(""); } }}
+                  placeholder="Search widgets — try chart, pnl, risk, table…"
+                  className="w-full rounded-lg border border-line/[0.15] bg-surface/[0.06] px-3 py-1.5 pr-16 text-[12px] text-ink-100 outline-none placeholder:text-ink-500 focus:border-aurora-cyan/40"
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-ink-500">
+                  {wq ? `${matchCount}` : WIDGETS.length}
+                </span>
+              </div>
+              {wq && (
+                <button onClick={() => setWq("")} className="ghost-btn py-1 text-xs" title="Clear search">Clear</button>
+              )}
+              <button onClick={() => setMenuOpen(false)} className="ghost-btn py-1 text-xs ml-auto">Done</button>
             </div>
             {userPresets.length > 0 && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -171,6 +200,13 @@ function Board() {
                     <button onClick={() => deleteUserPreset(p.name)} className="text-ink-600 hover:text-bear">✕</button>
                   </span>
                 ))}
+              </div>
+            )}
+            {matchCount === 0 && (
+              <div className="rounded-lg border border-line/[0.12] bg-surface/[0.04] px-3 py-6 text-center text-[12px] text-ink-400">
+                Nothing matches “{wq}”. Try <span className="text-ink-200">chart</span>,{" "}
+                <span className="text-ink-200">table</span>, <span className="text-ink-200">pnl</span>,{" "}
+                <span className="text-ink-200">risk</span> or <span className="text-ink-200">sector</span>.
               </div>
             )}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -185,8 +221,8 @@ function Board() {
                           className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-[12px] transition-colors
                             ${on ? "border-aurora-indigo/40 bg-aurora-indigo/10" : "border-line/[0.1] bg-surface/[0.05] hover:bg-surface/[0.1]"}`}>
                           <span className="min-w-0">
-                            <span className="block truncate font-medium text-ink-100">{w.title}</span>
-                            {w.subtitle && <span className="block truncate text-[10px] text-ink-600">{w.subtitle}</span>}
+                            <span className="block truncate font-medium text-ink-100"><Highlight text={w.title} q={wq} /></span>
+                            {w.subtitle && <span className="block truncate text-[10px] text-ink-400"><Highlight text={w.subtitle} q={wq} /></span>}
                           </span>
                           <span className={`chip shrink-0 ${on ? "bg-bull/15 text-bull" : "bg-surface/[0.1] text-ink-500"}`}>{on ? "Added" : "Add"}</span>
                         </button>

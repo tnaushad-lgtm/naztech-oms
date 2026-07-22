@@ -7,37 +7,44 @@ export type WidgetDef = {
   id: string;
   title: string;
   subtitle?: string;
-  category: "Market" | "Portfolio" | "Orders & Risk" | "News";
+  category: "Market" | "Portfolio" | "Orders & Risk" | "News" | "Operations" | "Reports";
+  /**
+   * Extra words the library search should match.
+   *
+   * A trader hunting the candlestick widget types "chart" or "graph", not "candlestick"; someone
+   * after the equity curve types "pnl" or "profit". Titles alone make the search a spelling test.
+   */
+  keywords?: string;
   w: number; h: number; minW: number; minH: number;
   Component: React.ComponentType;
 };
 
 export const WIDGETS: WidgetDef[] = [
   // Market
-  { id: "candles", title: "Candlestick Chart", subtitle: "OHLCV · selectable symbol", category: "Market", w: 6, h: 8, minW: 4, minH: 5, Component: CandleWidget },
-  { id: "sectorPerf", title: "Sector Performance", subtitle: "Avg change % by sector", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.SectorPerformance },
-  { id: "breadth", title: "Market Breadth", subtitle: "Advancers vs decliners", category: "Market", w: 3, h: 6, minW: 2, minH: 4, Component: W.MarketBreadth },
-  { id: "gainers", title: "Top Gainers", subtitle: "Best performers", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TopGainers },
-  { id: "losers", title: "Top Losers", subtitle: "Worst performers", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TopLosers },
-  { id: "active", title: "Most Active", subtitle: "By turnover", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.MostActive },
-  { id: "turnoverAsset", title: "Turnover by Asset Class", subtitle: "Treemap", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TurnoverByAsset },
-  { id: "indexBoard", title: "Index Board", subtitle: "DSE / CSE indices", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.IndexBoard },
-  { id: "sectorXtab", title: "Sector Cross-Tab", subtitle: "Sector × metrics", category: "Market", w: 5, h: 7, minW: 4, minH: 4, Component: W.SectorCrosstab },
-  { id: "heatmap", title: "Market Heatmap", subtitle: "Coloured by change %", category: "Market", w: 6, h: 6, minW: 4, minH: 4, Component: W.MarketHeatmap },
+  { id: "candles", keywords: "chart graph candlestick ohlc price volume technical rsi ema sma bollinger indicator", title: "Candlestick Chart", subtitle: "OHLCV · selectable symbol", category: "Market", w: 6, h: 8, minW: 4, minH: 5, Component: CandleWidget },
+  { id: "sectorPerf", keywords: "chart graph bar sector performance industry", title: "Sector Performance", subtitle: "Avg change % by sector", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.SectorPerformance },
+  { id: "breadth", keywords: "chart graph donut pie advancers decliners breadth market", title: "Market Breadth", subtitle: "Advancers vs decliners", category: "Market", w: 3, h: 6, minW: 2, minH: 4, Component: W.MarketBreadth },
+  { id: "gainers", keywords: "table list top gainers movers best risers", title: "Top Gainers", subtitle: "Best performers", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TopGainers },
+  { id: "losers", keywords: "table list top losers movers worst fallers", title: "Top Losers", subtitle: "Worst performers", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TopLosers },
+  { id: "active", keywords: "table list most active turnover volume liquid", title: "Most Active", subtitle: "By turnover", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.MostActive },
+  { id: "turnoverAsset", keywords: "chart treemap turnover asset class value", title: "Turnover by Asset Class", subtitle: "Treemap", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.TurnoverByAsset },
+  { id: "indexBoard", keywords: "index dsex cse indices board benchmark", title: "Index Board", subtitle: "DSE / CSE indices", category: "Market", w: 4, h: 6, minW: 3, minH: 4, Component: W.IndexBoard },
+  { id: "sectorXtab", keywords: "table crosstab sector metrics pivot", title: "Sector Cross-Tab", subtitle: "Sector × metrics", category: "Market", w: 5, h: 7, minW: 4, minH: 4, Component: W.SectorCrosstab },
+  { id: "heatmap", keywords: "chart heatmap map colour change movers", title: "Market Heatmap", subtitle: "Coloured by change %", category: "Market", w: 6, h: 6, minW: 4, minH: 4, Component: W.MarketHeatmap },
   // Portfolio
-  { id: "pnlTrend", title: "P&L Over Time", subtitle: "Equity curve", category: "Portfolio", w: 6, h: 7, minW: 4, minH: 5, Component: W.PnLTrend },
-  { id: "pfSummary", title: "Portfolio Summary", subtitle: "P&L snapshot", category: "Portfolio", w: 4, h: 5, minW: 3, minH: 4, Component: W.PortfolioSummary },
-  { id: "allocSector", title: "Allocation by Sector", category: "Portfolio", w: 3, h: 6, minW: 2, minH: 4, Component: W.AllocBySector },
-  { id: "allocAsset", title: "Allocation by Asset", category: "Portfolio", w: 3, h: 6, minW: 2, minH: 4, Component: W.AllocByAsset },
-  { id: "pnlByPos", title: "P&L by Position", subtitle: "Unrealized", category: "Portfolio", w: 5, h: 6, minW: 3, minH: 4, Component: W.PnLByPosition },
-  { id: "holdings", title: "Holdings", category: "Portfolio", w: 5, h: 7, minW: 4, minH: 4, Component: W.HoldingsGrid },
+  { id: "pnlTrend", keywords: "chart graph line equity curve pnl profit loss over time performance", title: "P&L Over Time", subtitle: "Equity curve", category: "Portfolio", w: 6, h: 7, minW: 4, minH: 5, Component: W.PnLTrend },
+  { id: "pfSummary", keywords: "portfolio summary pnl snapshot value cash", title: "Portfolio Summary", subtitle: "P&L snapshot", category: "Portfolio", w: 4, h: 5, minW: 3, minH: 4, Component: W.PortfolioSummary },
+  { id: "allocSector", keywords: "chart pie donut allocation sector exposure weight", title: "Allocation by Sector", category: "Portfolio", w: 3, h: 6, minW: 2, minH: 4, Component: W.AllocBySector },
+  { id: "allocAsset", keywords: "chart pie donut allocation asset class exposure weight", title: "Allocation by Asset", category: "Portfolio", w: 3, h: 6, minW: 2, minH: 4, Component: W.AllocByAsset },
+  { id: "pnlByPos", keywords: "chart bar pnl position unrealized profit loss", title: "P&L by Position", subtitle: "Unrealized", category: "Portfolio", w: 5, h: 6, minW: 3, minH: 4, Component: W.PnLByPosition },
+  { id: "holdings", keywords: "table holdings positions stock shares qty", title: "Holdings", category: "Portfolio", w: 5, h: 7, minW: 4, minH: 4, Component: W.HoldingsGrid },
   // Orders & Risk
-  { id: "orderStatus", title: "Order Status Mix", category: "Orders & Risk", w: 3, h: 6, minW: 2, minH: 4, Component: W.OrderStatusBreakdown },
-  { id: "riskDist", title: "AI Risk Distribution", subtitle: "Score buckets", category: "Orders & Risk", w: 4, h: 6, minW: 3, minH: 4, Component: W.RiskDistribution },
-  { id: "blotter", title: "Order Blotter", category: "Orders & Risk", w: 5, h: 7, minW: 4, minH: 4, Component: W.OrderBlotter },
-  { id: "riskAlerts", title: "AI Risk Alerts", category: "Orders & Risk", w: 4, h: 7, minW: 3, minH: 4, Component: W.RiskAlerts },
+  { id: "orderStatus", keywords: "chart pie donut order status mix filled rejected", title: "Order Status Mix", category: "Orders & Risk", w: 3, h: 6, minW: 2, minH: 4, Component: W.OrderStatusBreakdown },
+  { id: "riskDist", keywords: "chart bar risk score distribution ai buckets", title: "AI Risk Distribution", subtitle: "Score buckets", category: "Orders & Risk", w: 4, h: 6, minW: 3, minH: 4, Component: W.RiskDistribution },
+  { id: "blotter", keywords: "table order blotter orders status fills", title: "Order Blotter", category: "Orders & Risk", w: 5, h: 7, minW: 4, minH: 4, Component: W.OrderBlotter },
+  { id: "riskAlerts", keywords: "risk alerts ai warnings breaches", title: "AI Risk Alerts", category: "Orders & Risk", w: 4, h: 7, minW: 3, minH: 4, Component: W.RiskAlerts },
   // News
-  { id: "news", title: "News & Announcements", category: "News", w: 4, h: 7, minW: 3, minH: 4, Component: W.NewsFeed },
+  { id: "news", keywords: "news announcements price sensitive dse", title: "News & Announcements", category: "News", w: 4, h: 7, minW: 3, minH: 4, Component: W.NewsFeed },
 ];
 
 export const WIDGET_MAP: Record<string, WidgetDef> = Object.fromEntries(WIDGETS.map((w) => [w.id, w]));

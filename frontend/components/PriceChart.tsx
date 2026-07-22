@@ -4,33 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { API, feedForecast } from "@/lib/api";
 import { nf } from "@/lib/format";
 import { INDICATORS, IndicatorId, compute, Candle } from "@/lib/indicators";
+import { cssRGB, INDICATOR_STORE } from "@/lib/chartTheme";
 
 const TFS = [
   { k: "1m", label: "1m" }, { k: "5m", label: "5m" }, { k: "15m", label: "15m" }, { k: "1d", label: "1D" },
 ];
-
-const STORE = "oms_chart_indicators";
-
-/**
- * Read a theme colour from the CSS variables rather than hard-coding hex.
- *
- * The chart used literal "#9aa3c4" / "#22c55e" values, so it was the one component that ignored the
- * theme switcher entirely — visibly wrong on the light `daylight` theme, where dark grey axis text
- * on a light background is the least of it. Everything else in the app is CSS-variable driven; the
- * chart has to read those variables at draw time because lightweight-charts wants concrete colours.
- */
-function cssRGB(varName: string, alpha = 1): string {
-  const FALLBACK = `rgba(148,163,184,${alpha})`;
-  if (typeof window === "undefined") return FALLBACK;
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-  if (!raw) return FALLBACK;
-  // The variables hold space-separated channels ("251 91 107") for Tailwind's <alpha-value> syntax.
-  // lightweight-charts parses colours itself and rejects CSS Color Level 4 spaces outright —
-  // "Cannot parse color: rgb(251 91 107)" — so always emit the comma form it understands.
-  const ch = raw.split(/[\s,]+/).filter(Boolean).join(",");
-  if (ch.split(",").length < 3) return FALLBACK;
-  return alpha === 1 ? `rgb(${ch})` : `rgba(${ch},${alpha})`;
-}
 
 export function PriceChart({
   securityId, symbol, exchange, ltp, height = 300,
@@ -46,14 +24,14 @@ export function PriceChart({
   const [on, setOn] = useState<IndicatorId[]>([]);
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORE);
+      const raw = localStorage.getItem(INDICATOR_STORE);
       if (raw) setOn(JSON.parse(raw));
     } catch { /* a corrupt preference is not worth blocking the chart for */ }
   }, []);
   const toggle = (id: IndicatorId) =>
     setOn((prev) => {
       const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
+      try { localStorage.setItem(INDICATOR_STORE, JSON.stringify(next)); } catch {}
       return next;
     });
 
@@ -203,7 +181,7 @@ export function PriceChart({
                   </button>
                 ))}
                 {on.length > 0 && (
-                  <button onClick={() => { setOn([]); try { localStorage.setItem(STORE, "[]"); } catch {} }}
+                  <button onClick={() => { setOn([]); try { localStorage.setItem(INDICATOR_STORE, "[]"); } catch {} }}
                     className="mt-1 w-full rounded px-2 py-1 text-left text-[11px] text-ink-400 hover:bg-white/5">
                     Clear all
                   </button>
