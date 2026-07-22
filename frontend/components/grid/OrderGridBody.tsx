@@ -722,8 +722,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           <span className="w-[76px]" />
         </div>
 
-        {/* the ledger, with the book alongside when asked for */}
-        <div className="flex min-h-0 flex-1 gap-2">
+        {/* the ledger */}
         <div className="min-h-0 flex-1 overflow-auto rounded-b-lg border border-line bg-obsidian-900/40">
           {rows.map((r, i) => {
             const sec = r.securityId ? byId.get(r.securityId) : null;
@@ -1052,21 +1051,25 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           })}
         </div>
 
+        {/* The book sits BELOW the ledger, not beside it. Beside, it took 300px off the grid and
+            pushed the entry columns into a horizontal scroll — the two things a trader needs at once
+            were competing for the same width. Stacked, both get the full width of the screen: the
+            grid keeps its columns, and the ladder gets room to breathe across. */}
         {showDepth && (
-          <div className={`${compact ? "w-[230px]" : "w-[300px]"} shrink-0 overflow-hidden rounded-b-lg border border-line bg-obsidian-900/40 p-2`}>
+          <div className={`${compact ? "h-[150px]" : "h-[190px]"} shrink-0 overflow-hidden rounded-lg border border-line bg-obsidian-900/40 px-2 py-1.5`}>
             <OrderDepthPanel
               securityId={litRow?.securityId ?? null}
               symbol={litSec?.symbol}
               side={litRow?.sideProv === "confirmed" ? litRow.side : undefined}
               price={litRow?.type === "MARKET" ? null : litRow?.price ?? null}
-              levels={compact ? 5 : 8}
+              levels={compact ? 4 : 5}
               compact={compact}
+              wide
               // Clicking a level prices the row you are editing — the ladder is an input, not a poster.
               onPickPrice={(p) => litRow && patch(litRow.key, { price: p, priceProv: "confirmed" })}
             />
           </div>
         )}
-        </div>
 
         {/* totals */}
         <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line bg-obsidian-900/60 px-3 py-2 text-[11px]">

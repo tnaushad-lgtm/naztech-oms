@@ -31,7 +31,7 @@ import { nf } from "@/lib/format";
 type OwnOrder = { id: number; securityId: number; price: number; side: string; quantity: number; filledQty?: number; status: string };
 
 export function OrderDepthPanel({
-  securityId, symbol, side, price, onPickPrice, levels = 6, compact = false,
+  securityId, symbol, side, price, onPickPrice, levels = 6, compact = false, wide = false,
 }: {
   securityId: number | null;
   symbol?: string;
@@ -41,6 +41,12 @@ export function OrderDepthPanel({
   onPickPrice?: (p: number) => void;
   levels?: number;
   compact?: boolean;
+  /**
+   * Laid out under the order grid rather than beside it, so it is short and very wide. Bid and ask
+   * ladders sit side by side and each gets a cumulative column, because the horizontal room exists
+   * and cumulative size is what tells a trader how far a market order would walk.
+   */
+  wide?: boolean;
 }) {
   const { depth, changed, pushed } = useDepth(securityId ?? undefined, levels);
   const [own, setOwn] = useState<OwnOrder[]>([]);
@@ -97,7 +103,7 @@ export function OrderDepthPanel({
   const rows = Math.max(depth?.bids?.length || 0, depth?.asks?.length || 0, 1);
   const same = (a?: number, b?: number | null) => a != null && b != null && Math.abs(a - b) < 1e-6;
 
-  const Side = ({ lvl, isBid }: { lvl?: { price: number; quantity: number; orders: number }; isBid: boolean }) => {
+  const Side = ({ lvl, isBid, cum }: { lvl?: { price: number; quantity: number; orders: number }; isBid: boolean; cum?: number }) => {
     if (!lvl) return <div className="h-[19px]" />;
     const key = `${isBid ? "bid" : "ask"}:${nf(lvl.price, 4)}`;
     const lit = changed?.has(key);
@@ -118,19 +124,21 @@ export function OrderDepthPanel({
               style={{ width: `${pct}%` }} />
         {isBid ? (
           <>
-            <span className="relative text-ink-300">{nf(lvl.quantity, 0)}</span>
-            <span className="relative flex items-center gap-1 font-semibold text-bull">
+            {wide && <span className="relative w-[70px] text-left text-ink-400">{cum != null ? nf(cum, 0) : ""}</span>}
+            <span className="relative flex-1 text-right text-ink-200">{nf(lvl.quantity, 0)}</span>
+            <span className="relative ml-3 flex w-[86px] items-center justify-end gap-1 font-semibold text-bull">
               {mine ? <span className="text-aurora-cyan" title={`${nf(mine, 0)} of this is yours`}>▸</span> : null}
               {nf(lvl.price)}
             </span>
           </>
         ) : (
           <>
-            <span className="relative flex items-center gap-1 font-semibold text-bear">
+            <span className="relative flex w-[86px] items-center gap-1 font-semibold text-bear">
               {nf(lvl.price)}
               {mine ? <span className="text-aurora-cyan" title={`${nf(mine, 0)} of this is yours`}>◂</span> : null}
             </span>
-            <span className="relative text-ink-300">{nf(lvl.quantity, 0)}</span>
+            <span className="relative ml-3 flex-1 text-left text-ink-200">{nf(lvl.quantity, 0)}</span>
+            {wide && <span className="relative w-[70px] text-right text-ink-400">{cum != null ? nf(cum, 0) : ""}</span>}
           </>
         )}
       </button>
@@ -168,15 +176,27 @@ export function OrderDepthPanel({
       {/* ladder */}
       <div className="min-h-0 flex-1 overflow-auto rounded border border-line/[0.1]">
         <div className="grid grid-cols-2 gap-px bg-line/[0.08] text-[9px] uppercase tracking-wider text-ink-400">
-          <div className="flex justify-between bg-obsidian-850 px-1 py-0.5"><span>Qty</span><span>Bid</span></div>
-          <div className="flex justify-between bg-obsidian-850 px-1 py-0.5"><span>Ask</span><span>Qty</span></div>
-        </div>
-        {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="grid grid-cols-2 gap-px border-t border-line/[0.06]">
-            <Side lvl={depth?.bids?.[i]} isBid />
-            <Side lvl={depth?.asks?.[i]} isBid={false} />
+          <div className="flex items-center bg-obsidian-850 px-1 py-0.5">
+            {wide && <span className="w-[70px]">Cum</span>}
+            <span className="flex-1 text-right">Qty</span>
+            <span className="ml-3 w-[86px] text-right">Bid</span>
           </div>
-        ))}
+          <div className="flex items-center bg-obsidian-850 px-1 py-0.5">
+            <span className="w-[86px]">Ask</span>
+            <span className="ml-3 flex-1 text-left">Qty</span>
+            {wide && <span className="w-[70px] text-right">Cum</span>}
+          </div>
+        </div>
+        {Array.from({ length: rows }).map((_, i) => {
+          const cumB = (depth?.bids || []).slice(0, i + 1).reduce((n, l) => n + l.quantity, 0);
+          const cumA = (depth?.asks || []).slice(0, i + 1).reduce((n, l) => n + l.quantity, 0);
+          return (
+            <div key={i} className="grid grid-cols-2 gap-px border-t border-line/[0.06]">
+              <Side lvl={depth?.bids?.[i]} isBid cum={cumB} />
+              <Side lvl={depth?.asks?.[i]} isBid={false} cum={cumA} />
+            </div>
+          );
+        })}
       </div>
 
       {!compact && own.length > 0 && (
