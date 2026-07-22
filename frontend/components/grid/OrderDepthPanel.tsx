@@ -160,7 +160,10 @@ export function OrderDepthPanel({
     <div className="flex h-full min-h-0 flex-col">
       {/* header — the market, and what this order would do to it */}
       <div className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1 text-[10px]">
-        <span className="font-semibold uppercase tracking-wider text-ink-200">{symbol || depth?.symbol || "Book"}</span>
+        <span className="rounded bg-aurora-cyan/15 px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.12em] text-aurora-cyan">
+          Market Depth
+        </span>
+        <span className="text-[12px] font-semibold uppercase tracking-wider text-ink-100">{symbol || depth?.symbol || "—"}</span>
         <span className="text-ink-400">
           bid <span className="tabular-nums text-bull">{bestBid ? nf(bestBid) : "—"}</span>
         </span>
