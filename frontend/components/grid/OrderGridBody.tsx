@@ -265,6 +265,8 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
   const [lit, setLit] = useState<string | null>(null);
   const [audit, setAudit] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** Row whose client field should take focus once React has rendered it. */
+  const [focusRow, setFocusRow] = useState<string | null>(null);
   const [toast, setToast] = useState("");
 
   const byId = useMemo(() => new Map(secs.map((s) => [s.securityId, s])), [secs]);
@@ -350,6 +352,13 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.nonce, seed?.securityId, byId]);
 
+  useEffect(() => {
+    if (!focusRow) return;
+    const el = document.querySelector<HTMLInputElement>(`[data-client-row="${focusRow}"]`);
+    el?.focus();
+    setFocusRow(null);
+  }, [focusRow, rows]);
+
   // F2 toggles audit mode — 22px rows, band suppressed, for checking a batch before Send All.
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "F2") { e.preventDefault(); setAudit((a) => !a); } };
@@ -361,13 +370,48 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...p, risk: null, sent: null } : r)));
   }, []);
 
-  const addRow = (after?: string) =>
+  const addRow = (after?: string): string => {
+    const r = newRow();
     setRows((rs) => {
-      const r = newRow();
       const i = after ? rs.findIndex((x) => x.key === after) : -1;
-      const out = i < 0 ? [...rs, r] : [...rs.slice(0, i + 1), r, ...rs.slice(i + 1)];
-      setLit(r.key);
-      return out;
+      return i < 0 ? [...rs, r] : [...rs.slice(0, i + 1), r, ...rs.slice(i + 1)];
+    });
+    setLit(r.key);
+    return r.key;
+  };
+
+  /**
+   * Enter commits the row and opens the next one — which the toolbar has been advertising since this
+   * screen was built, without it being implemented. A trader working down a list should never have to
+   * reach for the mouse to start the next order.
+   *
+   * On the last row it creates a new one; otherwise it moves to the row below. Either way focus lands
+   * in the client field, because that is where entry starts. Enter inside an open combobox never
+   * reaches here — ComboBox stops propagation when it is choosing — so picking a client does not
+   * accidentally commit the row.
+   */
+  const commitAndNext = (key: string) => {
+    const i = rows.findIndex((r) => r.key === key);
+    if (i < 0) return;
+    if (i === rows.length - 1) setFocusRow(addRow(key));
+    else { setLit(rows[i + 1].key); setFocusRow(rows[i + 1].key); }
+  };
+
+  /** Same client, same instrument, different size — the common shape of a working order list. */
+  const duplicateRow = (key: string) =>
+    setRows((rs) => {
+      const i = rs.findIndex((r) => r.key === key);
+      if (i < 0) return rs;
+      const src = rs[i];
+      const copy: Row = {
+        ...src,
+        key: `r${Date.now()}_${seq++}`,
+        sel: false,
+        risk: null, checking: false,
+        sent: null,          // a duplicate has not been sent, whatever the original did
+      };
+      setLit(copy.key);
+      return [...rs.slice(0, i + 1), copy, ...rs.slice(i + 1)];
     });
 
   const removeRow = (key: string) =>
@@ -651,7 +695,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           {!compact && <span className="w-[210px]">Order terms</span>}
           {!compact && <span className="w-[104px] text-right">Value</span>}
           <span className={compact ? "w-[104px]" : "w-[130px]"}>Risk</span>
-          <span className="w-[54px]" />
+          <span className="w-[76px]" />
         </div>
 
         {/* the ledger */}
@@ -701,6 +745,11 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
             return (
               <div key={r.key}
                 onClick={() => !audit && setLit(r.key)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || e.shiftKey) return;
+                  e.preventDefault();
+                  commitAndNext(r.key);
+                }}
                 className={`border-b border-line/40 transition-colors ${
                   blocked ? "bg-bear/[0.06]"
                     // In review mode a row that will NOT send is the thing worth seeing, so tint it.
@@ -732,6 +781,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       <span className="text-[12px] text-ink-200">{acct?.boId} · {acct?.name}</span>
                     ) : (
                       <ComboBox items={acctItems} value={r.accountId} placeholder="BO or name…"
+                        inputProps={{ "data-client-row": r.key } as any}
                         className={r.accountProv !== "confirmed" ? "rounded ring-1 ring-dashed ring-amber-400/70" : ""}
                         onChange={(id) => patch(r.key, { accountId: id, accountProv: id ? "confirmed" : "unset" })} />
                     )}
@@ -843,10 +893,12 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       : <span className="text-bear">✕ {r.risk.reason}</span>}
                   </span>
 
-                  <span className="flex w-[54px] shrink-0 justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)}
+                  <span className="flex w-[76px] shrink-0 justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                    <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)} title="Send this row"
                       className="rounded border border-line px-1 text-[10px] text-ink-300 disabled:opacity-25 hover:bg-white/5">↵</button>
-                    <button onClick={() => removeRow(r.key)}
+                    <button onClick={() => duplicateRow(r.key)} title="Duplicate this row"
+                      className="rounded border border-line px-1 text-[10px] text-ink-400 hover:text-ink-100">⧉</button>
+                    <button onClick={() => removeRow(r.key)} title="Remove this row"
                       className="rounded border border-line px-1 text-[10px] text-ink-500 hover:text-bear">✕</button>
                   </span>
                 </div>
