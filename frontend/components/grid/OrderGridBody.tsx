@@ -245,9 +245,17 @@ function Group({ name, hint, children }: { name: string; hint: string; children:
  *
  * `onClose` is only supplied when floating; the routed page passes nothing and shows no close.
  */
-export function OrderGridBody({ onClose, compact = false, seed }: {
+export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
   onClose?: () => void;
   compact?: boolean;
+  /**
+   * Reports the SSE connection up to whoever owns the page chrome.
+   *
+   * The body is the thing holding the stream, but the Live/Offline badge lives in Shell, which the
+   * body does not render. Calling useLive again in the page would open a SECOND EventSource per tab
+   * — useLive constructs one per call — so the state is lifted instead of duplicated.
+   */
+  onConnected?: (connected: boolean) => void;
   /** "Trade this" from another screen — see lib/orderIntent. Side is never seeded, only price. */
   seed?: { securityId: number; price?: number | null; side?: "BUY" | "SELL"; nonce?: number } | null;
 }) {
@@ -463,11 +471,13 @@ export function OrderGridBody({ onClose, compact = false, seed }: {
   // `connected` drives the Live/Offline badge in the header. Every other screen passes it through;
   // this one did not, so the badge read "Offline" permanently regardless of the real stream state —
   // maximally misleading on the screen where you go to ask why an order is not moving.
-  const { connected: _connected } = useLive((type, data) => {
+  const { connected } = useLive((type, data) => {
     if (type === "order" && data?.id != null && data?.status) {
       applyStatus(new Map<number, string>([[data.id, data.status]]));
     }
   });
+
+  useEffect(() => { onConnected?.(connected); }, [connected, onConnected]);
 
   const rowsRef = useRef<Row[]>(rows);
   useEffect(() => { rowsRef.current = rows; }, [rows]);
