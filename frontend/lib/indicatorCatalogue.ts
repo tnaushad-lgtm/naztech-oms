@@ -316,6 +316,20 @@ export function describe(a: Applied): string {
   return vals.length ? `${a.id} ${vals.join(" · ")}` : a.id;
 }
 
+/**
+ * Like describe(), but disambiguated against the other instances on the chart.
+ *
+ * Two EMAs both at period 21 produce two chips reading "EMA 21", and the trader cannot tell which
+ * colour belongs to which row in the settings list. Only the ones that actually collide get a
+ * suffix — numbering every chip when nothing is ambiguous is noise.
+ */
+export function describeUnique(a: Applied, all: Applied[]): string {
+  const label = describe(a);
+  const same = all.filter((x) => describe(x) === label);
+  if (same.length < 2) return label;
+  return `${label} #${same.findIndex((x) => x.uid === a.uid) + 1}`;
+}
+
 let seq = 0;
 /**
  * Instance ids are sequential, not random: they end up in localStorage and in React keys, and a

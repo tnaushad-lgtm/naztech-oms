@@ -28,7 +28,7 @@ import { nf } from "@/lib/format";
 import { chartBase, candleColours, cssRGB } from "@/lib/chartTheme";
 import { Candle, heikinAshi } from "@/lib/indicators";
 import {
-  Applied, byId, describe, migrateLegacy, newApplied, reviveApplied,
+  Applied, byId, describe, describeUnique, migrateLegacy, newApplied, reviveApplied,
 } from "@/lib/indicatorCatalogue";
 
 type Sec = { securityId: number; symbol: string; name: string; ltp: number; assetClass: string; changePct?: number };
@@ -39,6 +39,16 @@ type Order = {
 
 /** An order of ours that has traded. Not the public tape — see loadMine(). */
 type Fill = { id: number; side: string; price: number; quantity: number; at: string };
+
+/** What the pointer is over: the bar itself, plus every indicator's value at that bar. */
+type Hover = {
+  time: number | string;
+  candle?: Candle;
+  x: number;
+  y: number;
+  /** Which pane the pointer is in, so the readout can be placed there. */
+  pane: "price" | string;
+};
 
 /** Statuses after which an order can no longer rest on the book. */
 const TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED", "EXPIRED"]);
@@ -107,15 +117,26 @@ export default function ChartPage() {
   const [showMine, setShowMine] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [fills, setFills] = useState<Fill[]>([]);
-  const [ohlc, setOhlc] = useState<Candle | null>(null);
   /** Working orders priced outside the drawn price range — see the fitOrders block below. */
   const [offscreen, setOffscreen] = useState<Order[]>([]);
   const [fitOrders, setFitOrders] = useState(false);
   const [bars, setBars] = useState(0);
   const [restored, setRestored] = useState(false);
+  /** What the crosshair is currently over — drives the legend values and the floating readout. */
+  const [hover, setHover] = useState<Hover>(null);
 
   const priceRef = useRef<HTMLDivElement>(null);
   const subRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  /**
+   * Indicator values indexed by instance and bar time, built once per draw.
+   *
+   * The alternative is asking lightweight-charts for each series' data on every mouse move, which
+   * means holding a handle to every series and doing a lookup per pointer event. Precomputing at
+   * draw time makes the hover path a couple of Map reads — a chart with eight overlays still
+   * tracks the pointer without dropping frames.
+   */
+  const valueIndex = useRef<Map<string, Map<string, { name: string; value: number }[]>>>(new Map());
+  const candleIndex = useRef<Map<string, Candle>>(new Map());
 
   const sec = useMemo(() => secs.find((s) => s.securityId === securityId) || null, [secs, securityId]);
   const items: ComboItem[] = useMemo(
@@ -302,6 +323,25 @@ export default function ChartPage() {
         color: c.close >= c.open ? cssRGB("--bull", 0.4) : cssRGB("--bear", 0.4),
       })));
 
+      // Rebuilt each draw so a stale index can never outlive the series it describes.
+      valueIndex.current = new Map();
+      candleIndex.current = new Map(shown.map((c) => [String(c.time), c]));
+
+      /** Index one indicator's outputs by bar time, for the crosshair readout. */
+      const indexValues = (uid: string, out: { series: { name: string; points: any[] }[] }) => {
+        const m = new Map<string, { name: string; value: number }[]>();
+        for (const ser of out.series) {
+          for (const pt of ser.points) {
+            if (pt.value === undefined || pt.value === null) continue;   // whitespace gaps carry no value
+            const k = String(pt.time);
+            const arr = m.get(k);
+            if (arr) arr.push({ name: ser.name, value: pt.value });
+            else m.set(k, [{ name: ser.name, value: pt.value }]);
+          }
+        }
+        valueIndex.current.set(uid, m);
+      };
+
       // ---- price-pane overlays, one instance at a time
       for (const a of overlays) {
         const entry = byId(a.id);
@@ -309,6 +349,7 @@ export default function ChartPage() {
         let out;
         try { out = entry.compute(raw, a.params); }
         catch { continue; }         // one bad indicator must not take the whole chart down
+        indexValues(a.uid, out);
 
         for (const s of out.series) {
           if (!s.points.length) continue;
@@ -413,15 +454,42 @@ export default function ChartPage() {
 
       priceChart.timeScale().fitContent();
 
-      // OHLC readout follows the crosshair — the legend a trader reads instead of hovering blind
-      priceChart.subscribeCrosshairMove((p: any) => {
-        if (!p?.time) { setOhlc(null); return; }
-        const d = p.seriesData?.get(main);
-        if (!d) { setOhlc(null); return; }
-        setOhlc("open" in d
-          ? { time: p.time, open: d.open, high: d.high, low: d.low, close: d.close }
-          : { time: p.time, open: d.value, high: d.value, low: d.value, close: d.value });
-      });
+      /**
+       * Crosshair readout, and the crosshair itself carried to the other panes.
+       *
+       * `syncingCross` matters: setCrosshairPosition on another pane makes that pane fire its own
+       * crosshair-move, which would call back into here and set the position on this one. Without
+       * the guard the panes ping-pong on every mouse move.
+       */
+      let syncingCross = false;
+      const anchor: { chart: any; series: any }[] = [];
+
+      const onCross = (p: any, paneId: string) => {
+        if (!p?.time || !p.point) {
+          setHover(null);
+          if (!syncingCross) {
+            syncingCross = true;
+            for (const t of anchor) t.chart.clearCrosshairPosition?.();
+            priceChart.clearCrosshairPosition?.();
+            syncingCross = false;
+          }
+          return;
+        }
+        setHover({ time: p.time, candle: candleIndex.current.get(String(p.time)), x: p.point.x, y: p.point.y, pane: paneId });
+
+        if (syncingCross) return;
+        syncingCross = true;
+        for (const t of [{ chart: priceChart, series: main }, ...anchor]) {
+          if (t.chart === (paneId === "price" ? priceChart : null)) continue;
+          // setCrosshairPosition needs a price to place the horizontal line; the pane's own series
+          // value at this time keeps it on the data rather than at an arbitrary height.
+          const d = t.chart === priceChart ? candleIndex.current.get(String(p.time))?.close : undefined;
+          try { t.chart.setCrosshairPosition(d ?? 0, p.time, t.series); } catch {}
+        }
+        syncingCross = false;
+      };
+
+      priceChart.subscribeCrosshairMove((p: any) => onCross(p, "price"));
 
       // ---- one pane per sub-study
       for (const a of subs) {
@@ -431,6 +499,7 @@ export default function ChartPage() {
         let out;
         try { out = entry.compute(raw, a.params); }
         catch { continue; }
+        indexValues(a.uid, out);
 
         host.innerHTML = "";
         const isLast = subs.indexOf(a) === subs.length - 1;
@@ -485,6 +554,8 @@ export default function ChartPage() {
           });
         }
         chart.timeScale().fitContent();
+        if (first) anchor.push({ chart, series: first });
+        chart.subscribeCrosshairMove((p: any) => onCross(p, a.uid));
       }
 
       /**
@@ -526,6 +597,22 @@ export default function ChartPage() {
     };
   }, [securityId, tf, type, showMine, fitOrders, ordersKey, fillsKey, indicatorKey]);
 
+  /** Indicator values at the hovered bar. Empty when the pointer is off the chart. */
+  const valuesAt = (uid: string): { name: string; value: number }[] => {
+    if (!hover) return [];
+    return valueIndex.current.get(uid)?.get(String(hover.time)) || [];
+  };
+
+  /** Bar timestamp for the readout. Candle times are unix seconds; 1D bars carry no useful clock. */
+  const hoverTime = (): string => {
+    if (!hover) return "";
+    const t = typeof hover.time === "number" ? new Date(hover.time * 1000) : new Date(String(hover.time));
+    if (Number.isNaN(t.getTime())) return String(hover.time);
+    return tf === "1d"
+      ? t.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })
+      : t.toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
+
   const quickAdd = (id: string) => {
     const existing = applied.filter((a) => a.id === id);
     // A quick button toggles: press it again and the instances it stands for come off, so it can
@@ -560,12 +647,12 @@ export default function ChartPage() {
               <span className="truncate text-[11px] text-ink-400">{sec.name}</span>
             </>
           )}
-          {ohlc && (
+          {hover?.candle && (
             <span className="ml-auto flex gap-3 text-[11px] tabular-nums text-ink-300">
-              <span>O <span className="text-ink-100">{nf(ohlc.open)}</span></span>
-              <span>H <span className="text-bull">{nf(ohlc.high)}</span></span>
-              <span>L <span className="text-bear">{nf(ohlc.low)}</span></span>
-              <span>C <span className="text-ink-100">{nf(ohlc.close)}</span></span>
+              <span>O <span className="text-ink-100">{nf(hover.candle.open)}</span></span>
+              <span>H <span className="text-bull">{nf(hover.candle.high)}</span></span>
+              <span>L <span className="text-bear">{nf(hover.candle.low)}</span></span>
+              <span>C <span className="text-ink-100">{nf(hover.candle.close)}</span></span>
             </span>
           )}
         </div>
@@ -635,21 +722,92 @@ export default function ChartPage() {
                   className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold"
                   style={{ color: a.colour, background: hexAlpha(a.colour, 0.12) }}>
                   <span className="inline-block h-[2px] w-3 rounded" style={{ background: a.colour }} />
-                  {describe(a)}
+                  {describeUnique(a, priceOverlays)}
+                  {/* the value under the crosshair, in the chip itself — the TradingView reading */}
+                  {valuesAt(a.uid).map((v) => (
+                    <span key={v.name} className="tabular-nums text-ink-100">{nf(v.value)}</span>
+                  ))}
                 </span>
               ))}
             </div>
           )}
 
-          <div ref={priceRef} className="w-full" />
+          <div className="relative w-full">
+            <div ref={priceRef} className="w-full" />
+
+            {/*
+              The floating readout. Positioned beside the pointer and flipped when it would run off
+              the right edge, because a tooltip that leaves the viewport is worse than none. It is
+              pointer-events-none so it can never intercept a click meant for the chart.
+            */}
+            {hover?.candle && hover.pane === "price" && (
+              <div
+                className="pointer-events-none absolute z-20 rounded-lg border border-line/[0.14] bg-obsidian-950/92 px-2.5 py-1.5 shadow-2xl backdrop-blur-sm"
+                style={{
+                  left: hover.x > (priceRef.current?.clientWidth ?? 0) - 200 ? hover.x - 186 : hover.x + 16,
+                  top: Math.max(4, hover.y - 8),
+                }}>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400">{hoverTime()}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
+                  <span className="text-ink-500">Open</span><span className="text-right text-ink-100">{nf(hover.candle.open)}</span>
+                  <span className="text-ink-500">High</span><span className="text-right text-bull">{nf(hover.candle.high)}</span>
+                  <span className="text-ink-500">Low</span><span className="text-right text-bear">{nf(hover.candle.low)}</span>
+                  <span className="text-ink-500">Close</span>
+                  <span className={`text-right font-semibold ${hover.candle.close >= hover.candle.open ? "text-bull" : "text-bear"}`}>
+                    {nf(hover.candle.close)}
+                  </span>
+                  {(() => {
+                    const chg = hover.candle.open ? ((hover.candle.close - hover.candle.open) / hover.candle.open) * 100 : 0;
+                    return (
+                      <>
+                        <span className="text-ink-500">Change</span>
+                        <span className={`text-right ${chg >= 0 ? "text-bull" : "text-bear"}`}>
+                          {chg >= 0 ? "+" : ""}{nf(chg, 2)}%
+                        </span>
+                      </>
+                    );
+                  })()}
+                  {typeof hover.candle.volume === "number" && (
+                    <>
+                      <span className="text-ink-500">Volume</span>
+                      <span className="text-right text-ink-200">{nf(hover.candle.volume, 0)}</span>
+                    </>
+                  )}
+                </div>
+
+                {priceOverlays.some((a) => valuesAt(a.uid).length > 0) && (
+                  <div className="mt-1.5 border-t border-line/[0.1] pt-1.5">
+                    {priceOverlays.map((a) => {
+                      const vals = valuesAt(a.uid);
+                      if (!vals.length) return null;
+                      return (
+                        <div key={a.uid} className="flex items-baseline gap-2 text-[11px]">
+                          <span className="inline-block h-[2px] w-3 shrink-0 rounded" style={{ background: a.colour }} />
+                          <span className="flex-1 truncate" style={{ color: a.colour }}>{describeUnique(a, priceOverlays)}</span>
+                          <span className="tabular-nums text-ink-100">
+                            {vals.map((v) => nf(v.value)).join(" / ")}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {subStudies.map((a) => (
             <div key={a.uid} className="mt-1 border-t border-line pt-1">
               <div className="mb-0.5 flex items-center gap-2 px-1">
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: a.colour }}>
-                  {describe(a)}
+                  {describeUnique(a, subStudies)}
                 </span>
-                <span className="truncate text-[10px] text-ink-500">{byId(a.id)?.hint}</span>
+                {valuesAt(a.uid).map((v) => (
+                  <span key={v.name} className="text-[10px] tabular-nums text-ink-100">
+                    <span className="text-ink-500">{v.name}</span> {nf(v.value)}
+                  </span>
+                ))}
+                {!hover && <span className="truncate text-[10px] text-ink-500">{byId(a.id)?.hint}</span>}
                 <button onClick={() => setApplied(applied.filter((x) => x.uid !== a.uid))}
                   title="Remove this study"
                   className="ml-auto rounded px-1.5 text-[12px] leading-none text-ink-500 hover:bg-bear/15 hover:text-bear">

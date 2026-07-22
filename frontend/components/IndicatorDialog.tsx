@@ -17,7 +17,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import {
   Applied, CatalogEntry, CATALOGUE, Category, PALETTE,
-  byId, describe, newApplied,
+  byId, describeUnique, newApplied,
 } from "@/lib/indicatorCatalogue";
 
 const ORDER: Category[] = ["Moving averages", "Bands & channels", "Momentum", "Volatility", "Volume", "Levels"];
@@ -215,7 +215,7 @@ export function IndicatorDialog({
                           <span className="inline-block h-[3px] w-4 shrink-0 rounded"
                                 style={{ background: a.hidden ? "rgb(var(--ink-600))" : a.colour }} />
                           <span className={`flex-1 truncate text-[12px] font-semibold ${a.hidden ? "text-ink-500 line-through" : "text-ink-100"}`}>
-                            {describe(a)}
+                            {describeUnique(a, applied)}
                           </span>
                           <span className="shrink-0 rounded px-1 text-[9px] font-bold uppercase tracking-wider text-ink-500">
                             {e.pane === "sub" ? "pane" : "price"}
