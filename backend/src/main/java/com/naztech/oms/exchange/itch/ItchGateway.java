@@ -67,6 +67,64 @@ public class ItchGateway implements MarketDataGateway {
      * proportional to what the market actually did rather than to how many instruments are listed.
      */
     private final java.util.Set<Long> dirty = new java.util.HashSet<>();
+    /**
+     * How many of each ITCH message type we have actually consumed.
+     *
+     * Added because "are we even receiving [F] Add-Order-with-Participant?" turned out to be
+     * unanswerable from the outside: the book looked plausible, so a whole message class could have
+     * been arriving and being dropped without any symptom except orders that never appeared. A
+     * counter per type makes that visible in one call.
+     */
+    private final Map<Character, java.util.concurrent.atomic.LongAdder> msgCounts = new ConcurrentHashMap<>();
+
+    /**
+     * Trade persistence, off the tick thread.
+     *
+     * Writing trades was already moved out of the book lock, but it still ran ON the scheduled tick,
+     * one MySQL round-trip per trade. A reconnect replays a whole day — tens of thousands of trades —
+     * so the tick spent minutes inside the database and stopped consuming the feed entirely: 150,000
+     * messages backed up behind it, the book went minutes stale, and every page that needed depth
+     * queued behind the same thread. A thread dump found it parked in a MySQL socket read with 42% of
+     * a core burnt.
+     *
+     * Now the tick hands trades to this writer and returns immediately. The books and the depth push
+     * are already current before this point — persistence is for the tape, last price and volume, and
+     * being a second behind on those costs nothing. Bounded and drop-loudly rather than unbounded:
+     * the same trade-off QuestDbTickStore already makes, for the same reason.
+     */
+    private static final int TRADE_QUEUE = 50_000;
+    private final java.util.concurrent.BlockingQueue<PendingTrade> tradeQueue =
+            new java.util.concurrent.ArrayBlockingQueue<>(TRADE_QUEUE);
+    private final java.util.concurrent.atomic.AtomicLong tradesDropped = new java.util.concurrent.atomic.AtomicLong();
+    private volatile Thread tradeWriter;
+
+    private void startTradeWriter() {
+        if (tradeWriter != null) return;
+        Thread t = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    flushTrade(tradeQueue.take());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                    // One bad trade must not kill the writer and silently stop the tape.
+                    log.warn("ITCH: trade persist failed ({}) — continuing", e.toString());
+                }
+            }
+        }, "itch-trade-writer");
+        t.setDaemon(true);
+        t.start();
+        tradeWriter = t;
+    }
+
+    /** Snapshot of the per-type message counts, for the connectivity endpoint. */
+    public Map<String, Long> messageCounts() {
+        Map<String, Long> out = new LinkedHashMap<>();
+        msgCounts.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(e -> out.put(String.valueOf(e.getKey()), e.getValue().sum()));
+        return out;
+    }
     private final Object lock = new Object();
     private final Random rnd = new Random();
     private ItchSource source;
@@ -157,6 +215,7 @@ public class ItchGateway implements MarketDataGateway {
             for (Itch.Msg m : source.open()) route(wire(m));   // empty for a live feed; seeds the sim
             ready = true;
             feedLive = true;
+            startTradeWriter();
             log.info("ITCH MARKET OPEN — {} ({} instruments mapped, {} indices), source='{}', transport='{}'",
                     liveVenue ? "consuming the live venue feed" : ("broadcast " + broadcast + " day-start messages"),
                     instruments.size(), indexIds.size(), source.name(), props.getTransport());
@@ -324,7 +383,15 @@ public class ItchGateway implements MarketDataGateway {
         // once — thousands of trades — and doing those DB writes under the lock is what starved depth()
         // and the snapshot push (the "No book / waiting for a push" freeze). The books are already
         // current and pushed above; the last-price/volume/tape catch up here without holding anyone up.
-        for (PendingTrade t : flush) flushTrade(t);
+        for (PendingTrade t : flush) {
+            if (!tradeQueue.offer(t)) {
+                long n = tradesDropped.incrementAndGet();
+                if (n % 1000 == 1) {
+                    log.warn("ITCH: trade-persist queue full at {} — {} trade(s) not written. The book and depth "
+                            + "are unaffected; the tape and day volume will under-report.", TRADE_QUEUE, n);
+                }
+            }
+        }
         stream.publish("market", Map.of("type", "itch", "ts", 0));
     }
 
@@ -440,6 +507,7 @@ public class ItchGateway implements MarketDataGateway {
     }
 
     private void route(Itch.Msg m) {
+        msgCounts.computeIfAbsent(m.type(), k -> new java.util.concurrent.atomic.LongAdder()).increment();
         switch (m.type()) {
             case 'A' -> { Itch.AddOrder a = (Itch.AddOrder) m;
                 if (!Itch.isReferencePrice(a)) { orderToSecurity.put(a.orderNumber(), a.orderbook()); book(a.orderbook()).apply(a); dirty.add(a.orderbook()); } }

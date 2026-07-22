@@ -104,6 +104,7 @@ public class ConnectivityController {
                 feed.put("session", gw.feedSession());            // venue session id, for the header
                 feed.put("seq", Math.max(0, health.expected() - 1));   // the last sequence we applied
                 itchMap.put("feed", feed);
+                itchMap.put("messageCounts", gw.messageCounts());
             }
         }
 
