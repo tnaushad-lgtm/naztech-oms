@@ -28,7 +28,13 @@ import { useDepth } from "@/lib/useDepth";
 import { get } from "@/lib/api";
 import { nf } from "@/lib/format";
 
-type OwnOrder = { id: number; securityId: number; price: number; side: string; quantity: number; filledQty?: number; status: string };
+/**
+ * As returned by /api/orders. Note there is NO securityId on this DTO — it carries `symbol`.
+ * Matching on securityId is why the "your order" markers never appeared: the filter silently
+ * matched nothing, so the panel had no own-orders to mark and looked simply as if the feature
+ * were missing.
+ */
+type OwnOrder = { id: number; symbol: string; price: number; side: string; quantity: number; filledQty?: number; status: string };
 
 export function OrderDepthPanel({
   securityId, symbol, side, price, onPickPrice, levels = 6, compact = false, wide = false,
@@ -53,20 +59,21 @@ export function OrderDepthPanel({
 
   // Our own working orders, so their levels can be marked. Polled rather than pushed because it
   // changes on our action, not the market's — and a stale marker here is cosmetic, not dangerous.
+  const mySymbol = symbol || depth?.symbol;
   useEffect(() => {
-    if (!securityId) { setOwn([]); return; }
+    if (!securityId || !mySymbol) { setOwn([]); return; }
     let alive = true;
     const tick = async () => {
       try {
         const all = await get<OwnOrder[]>("/api/orders");
         if (!alive) return;
-        setOwn((all || []).filter((o) => o.securityId === securityId && o.status === "OPEN"));
+        setOwn((all || []).filter((o) => o.symbol === mySymbol && o.status === "OPEN"));
       } catch { /* the ladder is still useful without the markers */ }
     };
     tick();
     const t = setInterval(tick, 4000);
     return () => { alive = false; clearInterval(t); };
-  }, [securityId]);
+  }, [securityId, mySymbol]);
 
   const ownAt = useMemo(() => {
     const m = new Map<string, number>();
@@ -98,6 +105,10 @@ export function OrderDepthPanel({
       </div>
     );
   }
+
+  // Which of our orders are priced outside the levels currently on screen.
+  const shownPrices = new Set([...(depth?.bids || []), ...(depth?.asks || [])].map((l) => nf(l.price, 4)));
+  const offScreen = own.filter((o) => !shownPrices.has(nf(o.price, 4)));
 
   const max = Math.max(1, ...(depth?.bids || []).map((b) => b.quantity), ...(depth?.asks || []).map((a) => a.quantity));
   const rows = Math.max(depth?.bids?.length || 0, depth?.asks?.length || 0, 1);
@@ -199,9 +210,17 @@ export function OrderDepthPanel({
         })}
       </div>
 
-      {!compact && own.length > 0 && (
-        <div className="mt-1 px-1 text-[10px] text-aurora-cyan">
-          ▸ {own.length} working order{own.length === 1 ? "" : "s"} of yours on this book
+      {own.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-x-3 px-1 text-[10px] text-aurora-cyan">
+          <span>▸ {own.length} working order{own.length === 1 ? "" : "s"} of yours here</span>
+          {/* An order priced away from the touch sits below the visible levels. Showing nothing at
+              all reads as "it did not arrive", which is the wrong conclusion entirely. */}
+          {offScreen.length > 0 && (
+            <span className="text-amber-300" title={offScreen.map((o) => `${o.side} ${nf(o.quantity - (o.filledQty || 0), 0)} @ ${nf(o.price)}`).join(" · ")}>
+              {offScreen.length} outside these {levels} levels
+              {offScreen[0] ? ` (${offScreen[0].side} ${nf(offScreen[0].quantity - (offScreen[0].filledQty || 0), 0)} @ ${nf(offScreen[0].price)})` : ""}
+            </span>
+          )}
         </div>
       )}
     </div>
