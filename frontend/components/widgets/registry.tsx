@@ -2,6 +2,12 @@
 
 import * as W from "./widgets";
 import { CandleWidget } from "./CandleWidget";
+import { RsiWidget } from "./RsiWidget";
+import * as M from "./moreWidgets";
+import { TickerTape } from "../TickerTape";
+import { RoutingBadge } from "../RoutingBadge";
+import { SessionBadge } from "../SessionBadge";
+import { NewsPanel } from "../NewsPanel";
 
 export type WidgetDef = {
   id: string;
@@ -43,6 +49,29 @@ export const WIDGETS: WidgetDef[] = [
   { id: "riskDist", keywords: "chart bar risk score distribution ai buckets", title: "AI Risk Distribution", subtitle: "Score buckets", category: "Orders & Risk", w: 4, h: 6, minW: 3, minH: 4, Component: W.RiskDistribution },
   { id: "blotter", keywords: "table order blotter orders status fills", title: "Order Blotter", category: "Orders & Risk", w: 5, h: 7, minW: 4, minH: 4, Component: W.OrderBlotter },
   { id: "riskAlerts", keywords: "risk alerts ai warnings breaches", title: "AI Risk Alerts", category: "Orders & Risk", w: 4, h: 7, minW: 3, minH: 4, Component: W.RiskAlerts },
+
+  // ---- Market ----------------------------------------------------------------
+  { id: "tickerTape", keywords: "ticker tape marquee scroller crawl strip ltp indices", title: "Ticker Tape", subtitle: "Scrolling indices & movers", category: "Market", w: 12, h: 2, minW: 4, minH: 2, Component: TickerTape },
+  { id: "rsi", keywords: "rsi relative strength index oscillator momentum overbought oversold indicator wilder 70 30", title: "RSI-14 Oscillator", subtitle: "Momentum · 70/30 bands", category: "Market", w: 4, h: 5, minW: 3, minH: 3, Component: RsiWidget },
+  { id: "depthLadder", keywords: "depth market depth book order book ladder bid ask level 2 l2 dom liquidity spread", title: "Market Depth", subtitle: "Live order book ladder", category: "Market", w: 3, h: 8, minW: 2, minH: 5, Component: M.DepthWidget },
+  { id: "timeSales", keywords: "time and sales tape prints trades executions t&s", title: "Time & Sales", subtitle: "Live market prints", category: "Market", w: 4, h: 7, minW: 3, minH: 4, Component: M.TimeAndSales },
+
+  // ---- Orders & Risk ---------------------------------------------------------
+  { id: "killSwitch", keywords: "kill switch halt panic stop trading broker firm suspend resume rms", title: "Broker Kill-Switch", subtitle: "Halt / resume a firm", category: "Orders & Risk", w: 4, h: 6, minW: 3, minH: 3, Component: M.BrokerKillSwitch },
+  { id: "rmsAlerts", keywords: "risk alerts rms breaches rejects score fat finger warnings meter", title: "RMS Risk Alerts", subtitle: "Server-scored, with meter", category: "Orders & Risk", w: 4, h: 7, minW: 3, minH: 4, Component: M.RmsAlertFeed },
+
+  // ---- Operations ------------------------------------------------------------
+  { id: "linkHealth", keywords: "fix itch connectivity link venue exchange session health status offline routing", title: "Exchange Link Health", subtitle: "FIX & ITCH traffic lights", category: "Operations", w: 4, h: 3, minW: 3, minH: 2, Component: RoutingBadge },
+  { id: "sessionBadge", keywords: "session badge market open closed halted phase pill status bell", title: "Market Phase", subtitle: "Open / halted / closed", category: "Operations", w: 2, h: 2, minW: 2, minH: 2, Component: SessionBadge },
+  { id: "fixSession", keywords: "fix session logon compid sequence heartbeat quickfix connectivity", title: "FIX Session Detail", subtitle: "CompIDs, sequences, heartbeat", category: "Operations", w: 4, h: 7, minW: 3, minH: 5, Component: M.FixSessionDetail },
+  { id: "itchFeed", keywords: "itch feed market data transport soupbintcp moldudp64 gaps sequence lost", title: "ITCH Feed Health", subtitle: "Sequence, gaps, lost", category: "Operations", w: 4, h: 7, minW: 3, minH: 5, Component: M.ItchFeedStatus },
+  { id: "exchangeKpis", keywords: "kpi counts overview brokers users securities orders trades clients admin", title: "Exchange KPIs", subtitle: "Control-plane counters", category: "Operations", w: 4, h: 5, minW: 3, minH: 3, Component: M.ExchangeKpis },
+  { id: "auditTrail", keywords: "audit log activity compliance trail history who did what", title: "Audit Trail", subtitle: "Recent control-plane activity", category: "Operations", w: 4, h: 7, minW: 3, minH: 4, Component: M.AuditTrail },
+  { id: "trecHolders", keywords: "trec brokers firms registry members limit", title: "TREC Holders", subtitle: "Broker registry", category: "Operations", w: 4, h: 6, minW: 3, minH: 3, Component: M.TrecHolders },
+  { id: "aiEngine", keywords: "ai engine minilm semantic index vectors on-prem status", title: "AI Engine Status", subtitle: "On-prem search index", category: "Operations", w: 3, h: 5, minW: 2, minH: 3, Component: M.AiEngineStatus },
+
+  // ---- News ------------------------------------------------------------------
+  { id: "newsFull", keywords: "news announcements price sensitive dividend agm halt sentiment dse notices", title: "News (full)", subtitle: "Categories & sentiment", category: "News", w: 4, h: 8, minW: 3, minH: 5, Component: NewsPanel },
   // News
   { id: "news", keywords: "news announcements price sensitive dse", title: "News & Announcements", category: "News", w: 4, h: 7, minW: 3, minH: 4, Component: W.NewsFeed },
 ];

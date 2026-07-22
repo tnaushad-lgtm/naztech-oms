@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ComboBox, ComboItem } from "@/components/ComboBox";
 import { SegGroup } from "@/components/grid/SegGroup";
+import { OrderDepthPanel } from "@/components/grid/OrderDepthPanel";
 import { useLive } from "@/lib/useLive";
 import { get, post } from "@/lib/api";
 import { getSession } from "@/lib/session";
@@ -274,6 +275,12 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
    * without turning the whole window back into the full screen.
    */
   const [moreRow, setMoreRow] = useState<string | null>(null);
+  /**
+   * Show the book beside the order being written. On by default on the full screen, where there is
+   * room; off by default in the compact floating window, where there is not — but one click away,
+   * because "did my order land on the book" is the question a trader asks straight after sending.
+   */
+  const [showDepth, setShowDepth] = useState(!compact);
   const [toast, setToast] = useState("");
 
   const byId = useMemo(() => new Map(secs.map((s) => [s.securityId, s])), [secs]);
@@ -619,6 +626,8 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
   }, [rows, byId, secOf]);
 
   const selCount = rows.filter((r) => r.sel).length;
+  const litRow = rows.find((r) => r.key === lit) || null;
+  const litSec = litRow?.securityId ? byId.get(litRow.securityId) : null;
   const H = audit ? "h-[22px]" : "h-[28px]";
 
   return (
@@ -648,6 +657,13 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
               title="Compact review: shrink every row and hide the editing band so a long batch fits on one screen, and anything not ready to send is called out. Also F2."
               className={`rounded-lg border px-3 py-1.5 text-[12px] ${audit ? "border-aurora-cyan/60 bg-aurora-cyan/20 font-semibold text-aurora-cyan" : "border-line text-ink-300 hover:bg-white/5"}`}>
               {audit ? "✓ Review mode" : "Review"}
+            </button>
+            <button
+              onClick={() => setShowDepth((v) => !v)}
+              title="Show the order book for the row you are editing, and where your own orders sit on it"
+              className={`rounded-lg border px-3 py-1.5 text-[12px] ${
+                showDepth ? "border-aurora-cyan/50 bg-aurora-cyan/15 text-aurora-cyan" : "border-line text-ink-200 hover:bg-white/5"}`}>
+              Depth
             </button>
             <button onClick={() => addRow()} className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-200 hover:bg-white/5">+ Row</button>
             <button
@@ -706,7 +722,8 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           <span className="w-[76px]" />
         </div>
 
-        {/* the ledger */}
+        {/* the ledger, with the book alongside when asked for */}
+        <div className="flex min-h-0 flex-1 gap-2">
         <div className="min-h-0 flex-1 overflow-auto rounded-b-lg border border-line bg-obsidian-900/40">
           {rows.map((r, i) => {
             const sec = r.securityId ? byId.get(r.securityId) : null;
@@ -1033,6 +1050,22 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
               </div>
             );
           })}
+        </div>
+
+        {showDepth && (
+          <div className={`${compact ? "w-[230px]" : "w-[300px]"} shrink-0 overflow-hidden rounded-b-lg border border-line bg-obsidian-900/40 p-2`}>
+            <OrderDepthPanel
+              securityId={litRow?.securityId ?? null}
+              symbol={litSec?.symbol}
+              side={litRow?.sideProv === "confirmed" ? litRow.side : undefined}
+              price={litRow?.type === "MARKET" ? null : litRow?.price ?? null}
+              levels={compact ? 5 : 8}
+              compact={compact}
+              // Clicking a level prices the row you are editing — the ladder is an input, not a poster.
+              onPickPrice={(p) => litRow && patch(litRow.key, { price: p, priceProv: "confirmed" })}
+            />
+          </div>
+        )}
         </div>
 
         {/* totals */}
