@@ -82,7 +82,7 @@ export function OrderGridLauncher() {
         open={open}
         onClose={() => setOpen(false)}
         initial={{ x: 140, y: 120, w: 780, h: 340 }}
-        minW={600}
+        minW={440}
         minH={200}
       >
         {/* compact: client name, side, ticker, MKT/LMT, price, qty — identifiers live in tooltips */}

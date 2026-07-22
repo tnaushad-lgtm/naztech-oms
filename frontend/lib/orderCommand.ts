@@ -61,7 +61,15 @@ export function parseCommand(raw: string, secMap: Map<string, number>): ParsedCo
   const side: "BUY" | "SELL" = sideTok === "S" ? "SELL" : "BUY";
 
   if (parts.length < 2) return { raw, ok: false, side, error: `Need a quantity after ${sideTok}` };
-  if (!/^\d+$/.test(parts[1])) return { raw, ok: false, side, error: "Quantity must be digits only" };
+  // A signed or fractional number is still a NUMBER — saying "digits only" of "-5" is untrue and
+  // sends the trader looking for a typo that is not there. Name the rule that actually failed.
+  if (/^-?\d+(\.\d+)?$/.test(parts[1])) {
+    const n = parseFloat(parts[1]);
+    if (n <= 0) return { raw, ok: false, side, error: "Quantity must be greater than 0" };
+    if (!Number.isInteger(n)) return { raw, ok: false, side, error: "Quantity must be a whole number of shares" };
+  } else if (!/^\d+$/.test(parts[1])) {
+    return { raw, ok: false, side, error: "Quantity must be digits only" };
+  }
   const qty = parseInt(parts[1], 10);
   if (qty <= 0) return { raw, ok: false, side, error: "Quantity must be greater than 0" };
 
@@ -77,13 +85,17 @@ export function parseCommand(raw: string, secMap: Map<string, number>): ParsedCo
 
   const priceStr = rest.slice(1).trim();
   const market = priceStr === "";
-  if (!market && !/^\d+(\.\d+)?$/.test(priceStr)) {
-    return { raw, ok: false, side, qty, symbol: sym, error: "Price must be a number (or leave blank for @ market)" };
+  if (!market) {
+    // Same rule as quantity: check "is it a number" and "is it positive" separately, so a negative
+    // price is told the truth ("must be greater than 0") rather than being called non-numeric.
+    if (!/^-?\d+(\.\d+)?$/.test(priceStr)) {
+      return { raw, ok: false, side, qty, symbol: sym, error: "Price must be a number (or leave blank for @ market)" };
+    }
+    if (parseFloat(priceStr) <= 0) {
+      return { raw, ok: false, side, qty, symbol: sym, error: "Price must be greater than 0" };
+    }
   }
   const price = market ? null : parseFloat(priceStr);
-  if (!market && (price as number) <= 0) {
-    return { raw, ok: false, side, qty, symbol: sym, error: "Price must be greater than 0" };
-  }
 
   return { raw, ok: true, side, symbol: sym, securityId: secMap.get(sym) as number, qty, price, market };
 }

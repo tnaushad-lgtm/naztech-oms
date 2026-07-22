@@ -14,7 +14,8 @@
  * Tab moves on WITHOUT committing — see the note on the Tab handler below.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Highlight } from "./Highlight";
 
 export type ComboItem = {
@@ -88,13 +89,51 @@ export function ComboBox({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
+  /** False until the user types into an open box — see `shown` below. */
+  const [typed, setTyped] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Where to paint the dropdown, in viewport coordinates.
+   *
+   * The list used to be absolutely positioned inside the cell, which put it inside the grid's
+   * overflow-auto scroller — so it was CLIPPED to the visible rows. On the second row of a short
+   * panel a trader searching 500 accounts could see one of them. Painting it into document.body
+   * escapes every ancestor's overflow; the trade is that the position must be computed and kept in
+   * step with scrolling and resizing.
+   */
+  const [rect, setRect] = useState<{ left: number; top: number; width: number; flip: boolean } | null>(null);
+
+  const measure = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const LIST_H = 264;
+    const below = window.innerHeight - r.bottom;
+    // Open upward when there is not room below — otherwise the list runs off the bottom of a panel
+    // sitting low on the screen and is unreachable.
+    const flip = below < LIST_H && r.top > below;
+    setRect({ left: r.left, top: flip ? r.top : r.bottom, width: Math.max(r.width, 240), flip });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) { setRect(null); return; }
+    measure();
+    const onMove = () => measure();
+    window.addEventListener("scroll", onMove, true);   // capture: any ancestor scroll moves the cell
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const selected = useMemo(() => items.find((i) => i.id === value) || null, [items, value]);
 
   const results: Scored[] = useMemo(() => {
-    const query = q.trim().toLowerCase();
+    const query = (typed ? q : "").trim().toLowerCase();
     const out: Scored[] = [];
     for (const item of items) {
       const score = rank(item, query);
@@ -105,13 +144,16 @@ export function ComboBox({
     }
     out.sort((a, b) => a.score - b.score || a.item.primary.localeCompare(b.item.primary));
     return out.slice(0, maxResults);
-  }, [items, q, maxResults]);
+  }, [items, q, typed, maxResults]);
 
   // Close on outside click. Committing is explicit (Enter/click), so an outside click abandons.
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (wrap.current && !wrap.current.contains(e.target as Node)) { setOpen(false); setQ(""); }
+      const t = e.target as Node;
+      const inAnchor = wrap.current?.contains(t);
+      const inList = listRef.current?.contains(t);     // the list is portalled, so it is not inside wrap
+      if (!inAnchor && !inList) { setOpen(false); setQ(""); setTyped(false); }
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -133,6 +175,7 @@ export function ComboBox({
     }
     setOpen(false);
     setQ("");
+    setTyped(false);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -149,45 +192,94 @@ export function ComboBox({
     }
     if (e.key === "Enter") {
       if (open && results.length) { e.preventDefault(); e.stopPropagation(); commit(); return; }
+      /*
+       * Open with NO match: swallow it. Falling through handed the grid an Enter, which committed
+       * the row and opened a new one — so typing a client name that does not exist silently
+       * appended a row, moved focus into it, and left the unmatched text stranded above looking
+       * exactly like a committed value. Enter on nothing must do nothing.
+       */
+      if (open) { e.preventDefault(); e.stopPropagation(); return; }
       // closed: fall through so the grid's Enter-adds-a-row handler still works
     }
-    if (e.key === "Escape") { e.preventDefault(); setOpen(false); setQ(""); return; }
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); setQ(""); setTyped(false); return; }
     // TAB DELIBERATELY DOES NOT PICK. Tab is the universal move-on key; binding it to
     // accept-the-highlighted-match hands a hurried trader a wrong BO account that they never chose
     // and that renders afterwards exactly like a deliberate one. Acceptance is always an explicit
     // Enter or click; tabbing out of an open list leaves the cell unset and the row un-sendable.
-    if (e.key === "Tab") { setOpen(false); setQ(""); }
+    if (e.key === "Tab") { setOpen(false); setQ(""); setTyped(false); }
     inputProps.onKeyDown?.(e);
   };
 
-  // Closed state shows the chosen value; focused state shows what you are typing.
-  const shown = open
-    ? q
-    : selected
-      ? selected.display ?? selected.primary + (selected.secondary ? ` · ${selected.secondary}` : "")
-      : "";
+  /** What the closed cell reads: the short display label when one is given. */
+  const settled = selected
+    ? selected.display ?? selected.primary + (selected.secondary ? ` · ${selected.secondary}` : "")
+    : "";
+
+  /**
+   * An OPEN box shows what you are typing — but only once you have typed.
+   *
+   * It used to show `q` unconditionally, so merely focusing a cell that already held a value blanked
+   * it on screen: auto-advancing into a filled ticker made "GP" disappear while securityId was still
+   * set, and the row read as empty when it was in fact ready to send. A field that erases itself
+   * when you look at it is worse than one that is hard to edit.
+   *
+   * Until the first keystroke the box keeps showing its value (selected, so typing still replaces it
+   * wholesale). `typed` resets on every open, commit and abandon.
+   */
+  const shown = open ? (typed ? q : settled) : settled;
 
   return (
     <div ref={wrap} className={`relative ${className}`}>
       <input
+        ref={inputRef}
         {...inputProps}
         disabled={disabled}
         value={shown}
         placeholder={placeholder}
         autoComplete="off"
         spellCheck={false}
-        onFocus={(e) => { setOpen(true); setActive(0); e.currentTarget.select(); }}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(0); }}
+        onFocus={(e) => {
+          setOpen(true); setActive(0); setTyped(false);
+          /*
+           * Select SYNCHRONOUSLY. A deferred select() (rAF/setTimeout) lands after the first
+           * keystroke of a fast typist and selects it, so the second character REPLACES the first:
+           * typing "GP" left "P", the list rebuilt from "P", and Enter committed PADMALIFE. Typing a
+           * ticker could buy a different company.
+           *
+           * No defer is needed anyway — while closed the box already displays the settled text, so
+           * it is in the DOM right now and there is nothing to wait for.
+           */
+          e.currentTarget.select();
+        }}
+        // Clicking a cell that already has focus must reopen the list. onFocus does not fire when the
+        // input is already focused, so after committing a value in place the box became unopenable
+        // by clicking it — the only way back was to focus something else first.
+        onMouseDown={() => { if (!open) { setOpen(true); setActive(0); setTyped(false); } }}
+        onChange={(e) => { setQ(e.target.value); setTyped(true); setOpen(true); setActive(0); }}
+        /*
+         * Close when focus leaves. Only an outside MOUSEDOWN closed it before, so moving on by
+         * keyboard left the list painted over unrelated rows — row 1's client list still hanging
+         * beside rows 2 and 3, long after its value was committed. Clicking an option does not
+         * fire this: the option's onMouseDown preventDefaults, so focus never leaves the input.
+         */
+        onBlur={() => { setOpen(false); setQ(""); setTyped(false); }}
         onKeyDown={onKeyDown}
         className="w-full rounded border border-line/70 bg-white/[0.05] px-2 py-0.5 text-[12px] text-ink-100
           hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none
           disabled:border-transparent disabled:bg-transparent disabled:text-ink-500"
       />
 
-      {open && (
+      {open && rect && createPortal(
         <div
           ref={listRef}
-          className="absolute left-0 z-50 mt-1 max-h-64 w-[320px] overflow-auto rounded-lg border border-line bg-obsidian-850 shadow-2xl"
+          style={{
+            position: "fixed",
+            left: Math.min(rect.left, Math.max(8, window.innerWidth - 340)),
+            top: rect.flip ? undefined : rect.top + 2,
+            bottom: rect.flip ? window.innerHeight - rect.top + 2 : undefined,
+            width: 320,
+          }}
+          className="z-[100] max-h-64 overflow-auto rounded-lg border border-line bg-obsidian-850 shadow-2xl"
         >
           {results.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-ink-300">{emptyLabel}</div>
@@ -217,7 +309,8 @@ export function ComboBox({
               showing first {maxResults} — keep typing to narrow
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

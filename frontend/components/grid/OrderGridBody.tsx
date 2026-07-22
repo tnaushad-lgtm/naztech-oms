@@ -236,6 +236,71 @@ const num = (s: string): number | null => {
 };
 
 /**
+ * A numeric cell that lets you type a decimal point.
+ *
+ * Binding the input straight to a parsed number cannot work: typing "301." parses to 301, the value
+ * re-renders as "301", the dot is gone, and the next keystroke gives "3014". 301.40 became 30140 and
+ * WAS SENT to the exchange — a limit price a hundred times too high, passing the pre-trade check
+ * because it is a perfectly valid number.
+ *
+ * So the text being typed is held here, verbatim, and only the parsed value flows outward. The
+ * external value re-syncs whenever this cell is not the one being edited, so paste, command entry
+ * and LTP seeding all still land.
+ *
+ * Also selects on focus: the price arrives pre-seeded from the last traded price, and without that
+ * the caret sits at 0 and typing PREPENDS — seed 300, type 301.2, get 300301.2.
+ */
+function NumCell({
+  value, onChange, integer, disabled, className, title, placeholder, inputProps, onPaste,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  integer?: boolean;
+  disabled?: boolean;
+  className?: string;
+  title?: string;
+  placeholder?: string;
+  inputProps?: Record<string, any>;
+  onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void;
+}) {
+  const [text, setText] = useState(value == null ? "" : String(value));
+  const editing = useRef(false);
+
+  useEffect(() => {
+    if (!editing.current) setText(value == null ? "" : String(value));
+  }, [value]);
+
+  const ok = integer ? /^\d*$/ : /^\d*\.?\d*$/;
+
+  return (
+    <input
+      {...inputProps}
+      value={text}
+      disabled={disabled}
+      title={title}
+      placeholder={placeholder}
+      inputMode="decimal"
+      autoComplete="off"
+      onPaste={onPaste}
+      onFocus={(e) => { editing.current = true; e.currentTarget.select(); }}
+      onBlur={() => {
+        editing.current = false;
+        // Tidy a half-typed value on the way out: "301." settles to "301", "" stays empty.
+        setText(value == null ? "" : String(value));
+      }}
+      onChange={(e) => {
+        const t = e.target.value.replace(/,/g, "");
+        if (!ok.test(t)) return;              // reject the keystroke, keep what was there
+        setText(t);
+        onChange(t === "" || t === "." ? null : num(t));
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className={className}
+    />
+  );
+}
+
+/**
  * A named group of controls on the qualifier band.
  *
  * The name is permanent, not focus-revealed: a trader learning the screen must be able to tell which
@@ -306,6 +371,13 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
    */
   const [showDepth, setShowDepth] = useState(!compact);
   const [toast, setToast] = useState("");
+  // Clear itself after a while. Every message here is informational; none needs to persist, and one
+  // that never leaves eventually reads as part of the furniture.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const byId = useMemo(() => new Map(secs.map((s) => [s.securityId, s])), [secs]);
   const secOf = useCallback((r: Row) => (r.securityId ? byId.get(r.securityId) ?? null : null), [byId]);
@@ -402,6 +474,35 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     setFocusRow(null);
   }, [focusRow, rows]);
 
+  /**
+   * Ctrl+Enter sends the row being edited.
+   *
+   * A dealer working by keyboard could fill a row entirely from the keys and then had no way to send
+   * it — the only routes were the mouse or seven Tabs across filled fields to reach the button. The
+   * guard is `sendable()`, the identical predicate the button uses, so this can never send anything
+   * the button would refuse; when it refuses it says why rather than doing nothing. Plain Enter is
+   * unchanged (commit and open the next row) because sending must stay a deliberate, distinct act.
+   */
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+      const r = rowsRef.current.find((x) => x.key === lit);
+      if (!r) return;
+      e.preventDefault();
+      if (r.sent?.id) { setToast("That row has already been sent."); return; }
+      const sec = r.securityId ? byId.get(r.securityId) : null;
+      if (!sendable(r, sec)) {
+        setToast(!filled(r) ? "Row is incomplete." : !confirmed(r) ? "Choose a client and a side first."
+          : r.risk?.pass === false ? `Blocked: ${r.risk.reason}` : "Waiting for the pre-trade check.");
+        return;
+      }
+      sendRow(r);
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lit, byId]);
+
   // F2 toggles audit mode — 22px rows, band suppressed, for checking a batch before Send All.
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "F2") { e.preventDefault(); setAudit((a) => !a); } };
@@ -421,9 +522,43 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
    * list, which is why qty and price are type=text — a type=number would have eaten them to
    * increment the value, which is also how it silently corrupted quantities before.
    */
+  /**
+   * RESPONSIVE DENSITY.
+   *
+   * The row is a line of fixed-width cells, so dragging the panel narrower used to push the action
+   * buttons past the right edge and out of sight — the trader could still see the order but had no
+   * way to send or delete it. Two things fix that: the least load-bearing columns fold away as space
+   * runs out, and the actions are pinned to the right so they are reachable at ANY width.
+   *
+   * What folds is chosen by what a trader can still see elsewhere. A MARKET order already prints
+   * "mkt" in its price cell, and a non-default validity is both in the row tooltip and one click away
+   * in the row band — so no VALUE is lost when a CONTROL folds, which is the standing rule here.
+   */
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [gridW, setGridW] = useState(9999);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setGridW(el.clientWidth));
+    ro.observe(el);
+    setGridW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const showType = compact && gridW >= 560;
+  const showValidity = compact && gridW >= 690;
+  /** Below this the risk column keeps its glyph and drops its words into the tooltip. */
+  const tightRisk = compact && gridW < 500;
+
   const COLS = compact
-    ? ["client", "ticker", "side", "type", "validity", "qty", "price"]
+    ? ["client", "ticker", "side",
+       ...(showType ? ["type"] : []),
+       ...(showValidity ? ["validity"] : []),
+       "qty", "price"]
     : ["client", "ticker", "side", "qty", "price"];
+
+  /** Column index by name — indices shift as columns fold, so nothing may hard-code them. */
+  const ci = (name: string) => Math.max(0, COLS.indexOf(name));
 
   /** Column widths for this mode. Header and cells read the same object so they cannot drift. */
   const w = compact ? W.compact : W.full;
@@ -439,6 +574,58 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
   }, [COLS.length]);
 
   const cellProps = (rowKey: string, col: number) => ({ "data-cell": `${rowKey}:${col}` } as any);
+
+  /**
+   * Advance to the first field of this row that still needs a value, not blindly to the next column.
+   *
+   * When the command box has already supplied ticker, side, quantity and price, walking the trader
+   * into those filled cells makes them re-confirm work they just did — and, before the ComboBox fix,
+   * appeared to erase it. If nothing is outstanding the row is done, so focus goes nowhere and the
+   * trader's next keystroke (Enter) opens the next row.
+   */
+  const focusNextGap = (rowKey: string, from: number) => {
+    /*
+     * Deferred, and read from a ref.
+     *
+     * This runs from a ComboBox's onPicked, which fires in the same tick as the setRows that records
+     * the pick — so the `rows` captured by this render still shows the field as empty, and the
+     * "first outstanding field" was the one just filled. Focus bounced straight back to the client
+     * cell instead of moving on.
+     *
+     * setTimeout, not requestAnimationFrame: rowsRef is refreshed in a passive effect, and those run
+     * AFTER paint while rAF runs before it. A frame callback would read the same stale rows.
+     */
+    setTimeout(() => focusNextGapNow(rowKey, from), 0);
+  };
+
+  const focusNextGapNow = (rowKey: string, from: number) => {
+    const r = rowsRef.current.find((x) => x.key === rowKey);
+    if (!r) return;
+    const missing = (col: number): boolean => {
+      switch (COLS[col]) {
+        case "client": return r.accountProv !== "confirmed";
+        case "ticker": return !r.securityId;
+        case "side": return r.sideProv !== "confirmed";
+        case "qty": return !r.qty;
+        case "price": return r.type !== "MARKET" && r.price == null;
+        default: return false;                    // type and validity always carry a workable default
+      }
+    };
+    for (let c = from; c < COLS.length; c++) if (missing(c)) { focusCell(rowKey, c); return; }
+    for (let c = 0; c < from; c++) if (missing(c)) { focusCell(rowKey, c); return; }
+    /*
+     * Nothing outstanding: the row is complete, so offer its SEND.
+     *
+     * This only takes when the button is enabled, and it is disabled until the pre-trade check comes
+     * back — a disabled button cannot take focus, so on a freshly completed row this quietly does
+     * nothing. That is why Ctrl+Enter exists (see the panel key handler): it is the keyboard route
+     * to sending that does not depend on winning a race with the risk check.
+     */
+    requestAnimationFrame(() => {
+      const btn = document.querySelector<HTMLButtonElement>(`[data-send="${rowKey}"]`);
+      if (btn && !btn.disabled) btn.focus();
+    });
+  };
 
   /** ArrowUp/ArrowDown move within a column; everything else is left alone. */
   const onGridKey = (e: React.KeyboardEvent, rowKey: string) => {
@@ -474,7 +661,16 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
 
   const applyCommand = () => {
     const p = cmdParsed;
-    if (!p?.ok) return;
+    /*
+     * Never fail silently. On a cold panel the instrument list has not arrived, so every command is
+     * unparseable — Enter did nothing, focus stayed put, and the dealer's next keystrokes (the
+     * client name) were appended onto the command string. Say what is wrong, out loud.
+     */
+    if (!p) return;
+    if (!p.ok) {
+      setToast(p.pending ? "Still loading instruments — try again in a moment." : (p.error || "Cannot read that command."));
+      return;
+    }
     const sec = p.securityId ? byId.get(p.securityId) : null;
 
     // Land in the lit row when it is still free, otherwise open a new one. Never overwrite an order
@@ -715,12 +911,22 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
 
   const sendMany = async (which: Row[]) => {
     const ready = which.filter((r) => sendable(r, secOf(r)));
-    const held = which.length - ready.length;
-    if (!ready.length) { setToast(`Nothing sent — ${held} row(s) unconfirmed, incomplete or blocked.`); return; }
+    /*
+     * "Held back" must mean WE REFUSED IT, not "it went earlier".
+     *
+     * This counted every non-ready row, so an already-sent, locked row was reported as held back —
+     * "Sent 1 · held back 1" after a clean single send, sending the trader hunting for a blocked
+     * order that does not exist. Rows that already have an id are simply not candidates.
+     */
+    const held = which.filter((r) => !r.sent?.id && !sendable(r, secOf(r))).length;
+    if (!ready.length) {
+      setToast(held ? `Nothing sent — ${held} row(s) unconfirmed, incomplete or blocked.` : "Nothing to send.");
+      return;
+    }
     setBusy(true); setToast("");
     for (const r of ready) await sendRow(r);
     setBusy(false);
-    setToast(`Sent ${ready.length}${held ? ` · held back ${held}` : ""}.`);
+    setToast(`Sent ${ready.length}${held ? ` · ${held} held back` : ""}.`);
   };
 
   // ---------------------------------------------------------------- paste
@@ -770,17 +976,25 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     setRows((rs) => rs.map((r) => (r.sel && !r.sent?.id ? { ...r, ...p, risk: null } : r)));
 
   const totals = useMemo(() => {
-    let buy = 0, sell = 0, ready = 0, held = 0, sent = 0;
+    let buy = 0, sell = 0, ready = 0, held = 0, sent = 0, unsided = 0;
     for (const r of rows) {
       const sec = r.securityId ? byId.get(r.securityId) : null;
       const px = r.type === "MARKET" ? sec?.ltp || 0 : r.price || 0;
       const v = px * (r.qty || 0);
-      if (r.side === "BUY") buy += v; else sell += v;
+      /*
+       * A row whose side was never chosen is NOT a buy. `side` holds "BUY" as its initial value, so
+       * summing on it alone reported the exposure of an order nobody has decided the direction of —
+       * the footer read "Buy 12,000" for a row the screen was simultaneously refusing to send as
+       * unconfirmed. It is counted separately, or not at all.
+       */
+      if (r.sideProv !== "confirmed") unsided += v;
+      else if (r.side === "BUY") buy += v;
+      else sell += v;
       if (r.sent?.id) sent++;
       else if (sendable(r, secOf(r))) ready++;
       else if (filled(r)) held++;
     }
-    return { buy, sell, net: buy - sell, ready, held, sent };
+    return { buy, sell, net: buy - sell, ready, held, sent, unsided };
   }, [rows, byId, secOf]);
 
   const selCount = rows.filter((r) => r.sel).length;
@@ -808,8 +1022,9 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                 if (e.key === "Escape") { e.preventDefault(); setCmd(""); }
               }}
               placeholder="B 100 GP @ 120"
+              
               spellCheck={false} autoComplete="off"
-              title="Type an order and press Enter to fill a row. It fills only — the client is still yours to choose, and nothing is sent until you press Send."
+              title="Type an order and press Enter to fill a row. It fills only — the client is still yours to choose, and nothing is sent until you press Send (or Ctrl+Enter on the lit row)."
               className={`min-w-0 flex-1 rounded-lg border bg-obsidian-950/60 px-2 py-1 text-[12px] tabular-nums text-ink-100 placeholder:text-ink-500 focus:outline-none focus:ring-1 ${
                 !cmd.trim() ? "border-line/70 focus:border-aurora-cyan focus:ring-aurora-cyan/40"
                   : cmdParsed?.ok ? "border-bull/60 focus:ring-bull/40"
@@ -888,24 +1103,32 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           </div>
         )}
 
-        {/* column header — fixed grid template shared by every row */}
-        <div className={`flex items-center ${compact ? "gap-1.5" : "gap-2"} rounded-t-lg border-x border-t border-line bg-obsidian-850 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-200 border-x border-t border-line`}>
-          <span className={w.rail} /><span className={w.check} /><span className={`${w.ord} text-right`}>#</span>
-          <span className={w.client}>Client</span>
-          <span className={w.ticker}>Ticker</span>
-          <span className={w.side}>Side</span>
-          {compact && <span className={w.type}>Type</span>}
-          {compact && <span className={w.validity}>Valid</span>}
-          <span className={`${w.qty} text-right`}>Qty</span>
-          <span className={`${w.price} text-right`}>Price</span>
-          {!compact && <span className="w-[210px]">Order terms</span>}
-          {!compact && <span className="w-[104px] text-right">Value</span>}
-          <span className={w.risk}>Risk</span>
-          <span className={w.act} />
-        </div>
+        {/*
+          The ledger, with the header INSIDE it.
 
-        {/* the ledger */}
-        <div className="min-h-0 flex-1 overflow-auto rounded-b-lg border border-line bg-obsidian-900/40">
+          The header used to be a sibling of the scroll container, which broke it two ways once the
+          panel narrowed: its spans had no shrink-0 so they compressed while the row cells did not
+          (labels drifted up to 90px away from their columns), and it could not scroll, so scrolling
+          the body slid the cells out from under fixed labels. Inside the same scroller, sticky to
+          the top, it shares one horizontal offset and one width with every row.
+        */}
+        <div ref={gridRef} className="min-h-0 flex-1 overflow-auto rounded-lg border border-line bg-obsidian-900/40">
+          <div className={`sticky top-0 z-20 flex w-max min-w-full items-center ${compact ? "gap-1.5" : "gap-2"} border-b border-line bg-obsidian-850 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-200 [&>*]:shrink-0`}>
+            <span className={w.rail} /><span className={w.check} /><span className={`${w.ord} text-right`}>#</span>
+            <span className={w.client}>Client</span>
+            <span className={w.ticker}>Ticker</span>
+            <span className={w.side}>Side</span>
+            {showType && <span className={w.type}>Type</span>}
+            {showValidity && <span className={w.validity}>Valid</span>}
+            <span className={`${w.qty} text-right`}>Qty</span>
+            {/* pr-2 keeps PRICE off RISK, which collided into one word at the default width */}
+            <span className={`${w.price} pr-2 text-right`}>Price</span>
+            {!compact && <span className="w-[210px]">Order terms</span>}
+            {!compact && <span className="w-[104px] text-right">Value</span>}
+            <span className={tightRisk ? "w-[22px]" : `${w.risk} !min-w-[20px] !flex-1 !shrink`}>{tightRisk ? "" : "Risk"}</span>
+            <span className={`${w.act} sticky right-0 bg-obsidian-850 pl-1`} />
+          </div>
+
           {rows.map((r, i) => {
             const sec = r.securityId ? byId.get(r.securityId) : null;
             const bond = isBond(sec);
@@ -948,8 +1171,16 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
             if (r.type.startsWith("STOP") && r.stop)
               terms.push({ t: `stop ${nf(r.stop, 2)}`, c: "text-aurora-teal font-semibold", title: `Stop trigger ${nf(r.stop, 2)}` });
 
+            // A folded column must not take its value with it. Anything hidden at this width is
+            // spelled out here, so hovering the row always answers "what exactly is this order".
+            const foldedBits: string[] = [];
+            if (!showType) foldedBits.push(r.type === "MARKET" ? "Market order" : `Type ${r.type}`);
+            if (!showValidity) foldedBits.push(`Validity ${r.validity}`);
+            const rowTitle = foldedBits.length ? `${foldedBits.join(" · ")} — widen the panel or press ⋯ to edit` : undefined;
+
             return (
               <div key={r.key}
+                title={rowTitle}
                 onClick={() => !audit && setLit(r.key)}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter" || e.shiftKey) return;
@@ -965,7 +1196,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
 
                 {/* ---------------- line 1 : the ledger line ---------------- */}
                 <div onKeyDown={(e) => onGridKey(e, r.key)}
-                     className={`flex items-center ${compact ? "gap-1.5" : "gap-2"} px-2 ${H} [&>*]:shrink-0`}>
+                     className={`flex w-max min-w-full items-center ${compact ? "gap-1.5" : "gap-2"} px-2 ${H} [&>*]:shrink-0`}>
                   {/* side rail — solid = BUY, hatched = SELL, dashed amber = unconfirmed */}
                   <span className={`h-full ${w.rail} shrink-0 rounded-[2px] ${
                     r.sideProv !== "confirmed" ? "border-l-2 border-dashed border-amber-400/80"
@@ -988,10 +1219,10 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       <span className="text-[12px] text-ink-200">{compact ? acct?.name : `${acct?.boId} · ${acct?.name}`}</span>
                     ) : (
                       <ComboBox items={acctItems} value={r.accountId} placeholder={compact ? "client…" : "BO or name…"}
-                        inputProps={{ "data-client-row": r.key, ...cellProps(r.key, 0) }}
+                        inputProps={{ "data-client-row": r.key, ...cellProps(r.key, ci("client")) }}
                         className={r.accountProv !== "confirmed" ? "rounded ring-1 ring-dashed ring-amber-400/70" : ""}
                         onChange={(id) => patch(r.key, { accountId: id, accountProv: id ? "confirmed" : "unset" })}
-                        onPicked={() => focusCell(r.key, 1)} />
+                        onPicked={() => focusNextGap(r.key, ci("ticker"))} />
                     )}
                   </div>
 
@@ -1003,9 +1234,15 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       <span className="text-[12px] text-ink-200">{sec?.symbol}</span>
                     ) : (
                       <ComboBox items={secItems} value={r.securityId} placeholder={compact ? "ticker…" : "ticker or name…"}
-                        inputProps={cellProps(r.key, 1)}
+                        inputProps={{
+                          ...cellProps(r.key, ci("ticker")),
+                          // The cell is 80px and SQURPHARMA is not; put the full symbol on the input
+                          // itself so a clipped ticker can still be confirmed by hovering it.
+                          title: sec ? `${sec.symbol} · ${sec.name}` : "Instrument",
+                          className: "text-ellipsis",
+                        } as any}
                         onChange={(id) => pickSecurity(r.key, id)}
-                        onPicked={() => focusCell(r.key, 2)} />
+                        onPicked={() => focusNextGap(r.key, ci("side"))} />
                     )}
                   </div>
 
@@ -1024,7 +1261,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   <div className={`${w.side} shrink-0`} onClick={(e) => e.stopPropagation()}>
                     {compact ? (
                       <div
-                        {...cellProps(r.key, 2)}
+                        {...cellProps(r.key, ci("side"))}
                         tabIndex={locked ? -1 : 0}
                         role="group" aria-label="Side"
                         title={r.sideProv === "confirmed" ? (r.side === "BUY" ? "Buy" : "Sell") : "Side not chosen — press B or S"}
@@ -1034,7 +1271,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                           if (k !== "b" && k !== "s") return;
                           e.preventDefault();
                           patch(r.key, { side: k === "b" ? "BUY" : "SELL", sideProv: "confirmed" });
-                          focusCell(r.key, 5);          // straight on to quantity
+                          focusNextGap(r.key, ci("qty"));          // straight on to quantity
                         }}
                         className={`flex overflow-hidden rounded border text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-aurora-cyan ${
                           r.sideProv !== "confirmed" ? "border-dashed border-amber-400/80" : "border-line/70"}`}>
@@ -1043,7 +1280,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                           return (
                             <button key={sd} type="button" disabled={locked} tabIndex={-1}
                               title={sd === "BUY" ? "Buy" : "Sell"}
-                              onClick={() => { patch(r.key, { side: sd, sideProv: "confirmed" }); focusCell(r.key, 5); }}
+                              onClick={() => { patch(r.key, { side: sd, sideProv: "confirmed" }); focusNextGap(r.key, ci("qty")); }}
                               className={`flex-1 py-0.5 transition-colors ${
                                 on ? (sd === "BUY" ? "bg-bull text-obsidian-950" : "bg-bear text-obsidian-950")
                                    : r.sideProv !== "confirmed" ? "text-amber-300 hover:bg-white/10"
@@ -1060,10 +1297,10 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                     )}
                   </div>
 
-                  {compact && (
+                  {showType && (
                     <div className={`${w.type} shrink-0`} onClick={(e) => e.stopPropagation()}>
                       <select
-                        {...cellProps(r.key, 3)}
+                        {...cellProps(r.key, ci("type"))}
                         disabled={locked} value={r.type}
                         onChange={(e) => {
                           const v = e.target.value as Row["type"];
@@ -1079,10 +1316,10 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                     </div>
                   )}
 
-                  {compact && (
+                  {showValidity && (
                     <div className={`${w.validity} shrink-0`} onClick={(e) => e.stopPropagation()}>
                       <select
-                        {...cellProps(r.key, 4)}
+                        {...cellProps(r.key, ci("validity"))}
                         disabled={locked} value={r.validity}
                         onChange={(e) => patch(r.key, { validity: e.target.value })}
                         title="How long the order lives. Day expires at the close."
@@ -1096,23 +1333,23 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   )}
 
                   {/* qty — type=text so arrow keys navigate rows instead of decrementing the value */}
-                  <input value={r.qty ?? ""} disabled={locked} inputMode="decimal"
-                    {...cellProps(r.key, compact ? 5 : 3)}
-                    onClick={(e) => e.stopPropagation()}
+                  <NumCell
+                    value={r.qty} integer disabled={locked}
+                    inputProps={cellProps(r.key, ci("qty"))}
                     onPaste={(e) => onPaste(e, r.key)}
-                    onChange={(e) => patch(r.key, { qty: num(e.target.value) })}
+                    onChange={(v) => patch(r.key, { qty: v })}
                     className={`${w.qty} shrink-0 rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums text-ink-100`} />
 
                   {/* price — ~ marks a derived value that is not what gets transmitted */}
                   <div className={`relative ${w.price} shrink-0`} onClick={(e) => e.stopPropagation()}>
                     {r.basis === "YIELD" && <span className="absolute -left-1 top-1 text-[10px] text-aurora-cyan">~</span>}
-                    <input
-                      value={r.type === "MARKET" ? "" : r.basis === "YIELD" ? nf(r.price || 0, 2) : r.price ?? ""}
-                      {...cellProps(r.key, compact ? 6 : 4)}
-                      disabled={locked || r.type === "MARKET" || r.basis === "YIELD"} inputMode="decimal"
+                    <NumCell
+                      value={r.type === "MARKET" ? null : r.basis === "YIELD" ? num(nf(r.price || 0, 2)) : r.price}
+                      disabled={locked || r.type === "MARKET" || r.basis === "YIELD"}
+                      inputProps={cellProps(r.key, ci("price"))}
                       placeholder={r.type === "MARKET" ? "mkt" : ""}
                       title={r.priceProv === "defaulted" ? "Seeded from the last traded price — edit it or leave it" : undefined}
-                      onChange={(e) => patch(r.key, { price: num(e.target.value), priceProv: "confirmed" })}
+                      onChange={(v) => patch(r.key, { price: v, priceProv: "confirmed" })}
                       className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums disabled:border-line/30 disabled:bg-transparent disabled:text-ink-500
                         ${r.priceProv === "defaulted" && r.type !== "MARKET" ? "italic text-amber-300/90" : "text-ink-100"}`} />
                   </div>
@@ -1136,7 +1373,11 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   )}
 
                   {/* risk — fixed width so a verdict never moves anything */}
-                  <span className={`${w.risk} shrink-0 truncate text-[11px]`} title={r.risk?.reason || ""}>
+                  {/* Grows with the panel instead of staying 70px: a blocked row's reason and a sent
+                      row's status were both truncated to a few characters even when maximised. It
+                      still never grows with its CONTENT, so a verdict arriving still shifts nothing. */}
+                  <span className={`${tightRisk ? "w-[22px] shrink-0" : `${w.risk} min-w-[20px] flex-1 shrink`} truncate text-[11px]`}
+                        title={r.risk?.reason || (!filled(r) ? "Incomplete — this row still needs values" : "")}>
                     {locked ? (
                       <span className="text-ink-300">
                         #{r.sent!.id} · <span className={statusTone(r.sent!.status)}>{statusText(r.sent!.status)}</span>
@@ -1151,7 +1392,10 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       : <span className="text-bear">✕ {r.risk.reason}</span>}
                   </span>
 
-                  <span className={`flex ${w.act} shrink-0 justify-end gap-1`} onClick={(e) => e.stopPropagation()}>
+                  {/* Pinned right: at the panel's minimum width the row scrolls under this, so SEND
+                      and delete stay reachable instead of disappearing off the edge. */}
+                  <span className={`flex ${w.act} sticky right-0 shrink-0 justify-end gap-1 bg-obsidian-900/95 pl-1 backdrop-blur-sm`}
+                        onClick={(e) => e.stopPropagation()}>
                     {/*
                       SEND, on every row and labelled as such.
                       
@@ -1161,6 +1405,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       pre-trade check cannot be sent from here any more than from Send all.
                     */}
                     <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)}
+                      data-send={r.key}
                       title={sendable(r, sec) ? "Send this order now" : "Not ready — see the risk column"}
                       className="rounded border border-bull/50 bg-bull/15 px-1 text-[10px] font-bold text-bull transition-colors disabled:border-line disabled:bg-transparent disabled:text-ink-500 disabled:opacity-40 hover:bg-bull/25">
                       SEND
@@ -1307,14 +1552,23 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           <span className="text-bull">Ready <span className="tabular-nums">{totals.ready}</span></span>
           {totals.held > 0 && <span className="text-amber-400">Held <span className="tabular-nums">{totals.held}</span></span>}
           {totals.sent > 0 && <span className="text-ink-300">Sent <span className="tabular-nums">{totals.sent}</span></span>}
-          <span className="ml-auto text-ink-400">Buy <span className="tabular-nums text-bull">{money(totals.buy)}</span></span>
+          {/* Value that has no side yet is shown as its own figure rather than being folded into
+              Buy, where it silently overstated the desk's exposure in one direction. */}
+          {totals.unsided > 0 && (
+            <span className="ml-auto text-amber-400" title="Rows whose side has not been chosen — not counted as buy or sell">
+              No side <span className="tabular-nums">{money(totals.unsided)}</span>
+            </span>
+          )}
+          <span className={`${totals.unsided > 0 ? "" : "ml-auto"} text-ink-400`}>Buy <span className="tabular-nums text-bull">{money(totals.buy)}</span></span>
           <span className="text-ink-400">Sell <span className="tabular-nums text-bear">{money(totals.sell)}</span></span>
           <span className="text-ink-400">Net <span className={`tabular-nums ${totals.net >= 0 ? "text-bull" : "text-bear"}`}>{money(Math.abs(totals.net))}</span></span>
         </div>
 
-        {/* toast — absolutely positioned so a message never costs a pixel of layout */}
+        {/* Toast — absolutely positioned so a message never costs a pixel of layout. It sits ABOVE the
+            footer rather than over it: anchored to the bottom right it covered the Sell and Net
+            exposure figures, and with no timer it stayed there for the rest of the session. */}
         {toast && (
-          <div className="absolute bottom-4 right-4 z-40 max-w-[420px] rounded-lg border border-line bg-obsidian-850 px-3 py-2 text-[11px] text-ink-200 shadow-2xl">
+          <div className="absolute bottom-12 right-4 z-40 max-w-[420px] rounded-lg border border-line bg-obsidian-850 px-3 py-2 text-[11px] text-ink-200 shadow-2xl">
             {toast}
             <button onClick={() => setToast("")} className="ml-3 text-ink-500 hover:text-ink-200">✕</button>
           </div>
