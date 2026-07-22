@@ -160,7 +160,9 @@ export function ComboBox({
         onFocus={(e) => { setOpen(true); setActive(0); e.currentTarget.select(); }}
         onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(0); }}
         onKeyDown={onKeyDown}
-        className="w-full rounded bg-transparent px-2 py-1 text-[12px] text-ink-100 outline-none focus:bg-white/[0.06] disabled:text-ink-600"
+        className="w-full rounded border border-line/70 bg-white/[0.05] px-2 py-0.5 text-[12px] text-ink-100
+          hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none
+          disabled:border-transparent disabled:bg-transparent disabled:text-ink-500"
       />
 
       {open && (

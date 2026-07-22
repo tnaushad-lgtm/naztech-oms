@@ -707,7 +707,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
         )}
 
         {/* column header — fixed grid template shared by every row */}
-        <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850/95 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-300">
+        <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-200">
           <span className="w-[4px]" /><span className="w-[16px]" /><span className="w-[22px] text-right">#</span>
           <span className={compact ? "w-[170px]" : "w-[210px]"}>Client</span>
           <span className={compact ? "w-[120px]" : "w-[190px]"}>Ticker</span>
@@ -782,7 +782,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                 } ${locked ? "opacity-60" : ""}`}>
 
                 {/* ---------------- line 1 : the ledger line ---------------- */}
-                <div className={`flex items-center gap-2 px-2 ${H}`}>
+                <div className={`flex items-center gap-2 px-2 ${H} [&>*]:shrink-0`}>
                   {/* side rail — solid = BUY, hatched = SELL, dashed amber = unconfirmed */}
                   <span className={`h-full w-[4px] shrink-0 rounded-[2px] ${
                     r.sideProv !== "confirmed" ? "border-l-2 border-dashed border-amber-400/80"
@@ -830,8 +830,8 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                         disabled={locked}
                         value={r.sideProv === "confirmed" ? r.side : ""}
                         onChange={(e) => patch(r.key, { side: e.target.value as Row["side"], sideProv: "confirmed" })}
-                        className={`w-full rounded bg-transparent px-1 py-0.5 text-[12px] font-bold outline-none focus:bg-white/[0.06] ${
-                          r.sideProv !== "confirmed" ? "text-amber-300 ring-1 ring-dashed ring-amber-400/70"
+                        className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[12px] font-bold ${
+                          r.sideProv !== "confirmed" ? "border-dashed border-amber-400/80 text-amber-300"
                             : r.side === "BUY" ? "text-bull" : "text-bear"}`}>
                         {/* An empty first option so an unchosen side reads as unchosen, not as BUY. */}
                         <option value="" className="bg-obsidian-850 text-amber-300">— side —</option>
@@ -856,7 +856,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                             ? { type: "MARKET", validity: "DAY", basis: "PRICE", orderYield: null }
                             : { type: v });
                         }}
-                        className="w-full rounded bg-transparent px-1 py-0.5 text-[11px] font-semibold text-ink-100 outline-none focus:bg-white/[0.06]">
+                        className="w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[11px] font-semibold text-ink-100">
                         <option value="LIMIT" className="bg-obsidian-850">LMT</option>
                         <option value="MARKET" className="bg-obsidian-850">MKT</option>
                       </select>
@@ -869,8 +869,8 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                         disabled={locked} value={r.validity}
                         onChange={(e) => patch(r.key, { validity: e.target.value })}
                         title="How long the order lives. Day expires at the close."
-                        className={`w-full rounded bg-transparent px-1 py-0.5 text-[11px] font-semibold outline-none focus:bg-white/[0.06] ${
-                          r.validity === DEF.validity ? "text-ink-300" : "text-aurora-violet"}`}>
+                        className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[11px] font-semibold ${
+                          r.validity === DEF.validity ? "text-ink-200" : "text-aurora-violet"}`}>
                         {VALID_SEGS.map((v) => (
                           <option key={v.value} value={v.value} className="bg-obsidian-850">{v.value}</option>
                         ))}
@@ -883,7 +883,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                     onClick={(e) => e.stopPropagation()}
                     onPaste={(e) => onPaste(e, r.key)}
                     onChange={(e) => patch(r.key, { qty: num(e.target.value) })}
-                    className="w-[74px] shrink-0 rounded bg-transparent px-1 text-right text-[12px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.06]" />
+                    className="w-[74px] shrink-0 rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums text-ink-100" />
 
                   {/* price — ~ marks a derived value that is not what gets transmitted */}
                   <div className="relative w-[84px] shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -894,7 +894,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       placeholder={r.type === "MARKET" ? "mkt" : ""}
                       title={r.priceProv === "defaulted" ? "Seeded from the last traded price — edit it or leave it" : undefined}
                       onChange={(e) => patch(r.key, { price: num(e.target.value), priceProv: "confirmed" })}
-                      className={`w-full rounded bg-transparent px-1 text-right text-[12px] tabular-nums outline-none focus:bg-white/[0.06] disabled:text-ink-600
+                      className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums disabled:border-line/30 disabled:bg-transparent disabled:text-ink-500
                         ${r.priceProv === "defaulted" && r.type !== "MARKET" ? "italic text-amber-300/90" : "text-ink-100"}`} />
                   </div>
 
@@ -966,7 +966,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                         {r.basis === "YIELD" && (
                           <input value={r.orderYield ?? ""} inputMode="decimal" placeholder="yield %"
                             onChange={(e) => patch(r.key, { orderYield: num(e.target.value) })}
-                            className="ml-1 w-[70px] rounded bg-white/[0.06] px-1 text-right text-[11px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.1]" />
+                            className="ml-1 w-[70px] rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[11px] tabular-nums text-ink-100" />
                         )}
                       </Group>
                     )}
@@ -984,7 +984,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       {r.type.startsWith("STOP") && (
                         <input value={r.stop ?? ""} inputMode="decimal" placeholder="trigger"
                           onChange={(e) => patch(r.key, { stop: num(e.target.value) })}
-                          className="ml-1 w-[68px] rounded bg-white/[0.06] px-1 text-right text-[11px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.1]" />
+                          className="ml-1 w-[68px] rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[11px] tabular-nums text-ink-100" />
                       )}
                     </Group>
                     )}
@@ -994,7 +994,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       <Group name="Stop trigger" hint="The price at which this stop order activates">
                         <input value={r.stop ?? ""} inputMode="decimal" placeholder="trigger"
                           onChange={(e) => patch(r.key, { stop: num(e.target.value) })}
-                          className="w-[76px] rounded bg-white/[0.06] px-1 text-right text-[11px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.1]" />
+                          className="w-[76px] rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[11px] tabular-nums text-ink-100" />
                       </Group>
                     )}
 
