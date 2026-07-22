@@ -6,39 +6,9 @@ import { useLive } from "@/lib/useLive";
 import { get, post } from "@/lib/api";
 import { getSession } from "@/lib/session";
 import { nf } from "@/lib/format";
+// One grammar, one implementation — the order grid offers the same command box.
+import { ParsedCommand as Line, parseCommand, formatCommand as fmtCmd, COMMAND_EXAMPLES as EXAMPLES } from "@/lib/orderCommand";
 
-type Line = {
-  raw: string; ok: boolean; side?: "BUY" | "SELL"; symbol?: string; securityId?: number;
-  qty?: number; price?: number | null; market?: boolean; error?: string;
-};
-
-/** Strict grammar:  B|S  <qty>  <TICKER>  @  [price]   (blank price after @ = market order). */
-function validate(raw: string, secMap: Map<string, number>): Line {
-  const line = raw.trim();
-  const parts = line.split(/\s+/);
-  const sideTok = (parts[0] || "").toUpperCase();
-  if (sideTok !== "B" && sideTok !== "S") return { raw, ok: false, error: "Must start with B (buy) or S (sell)" };
-  const side = sideTok === "S" ? "SELL" : "BUY";
-  if (parts.length < 2) return { raw, ok: false, side, error: `Need a quantity after ${sideTok}` };
-  if (!/^\d+$/.test(parts[1])) return { raw, ok: false, side, error: "Quantity must be digits only" };
-  const qty = parseInt(parts[1], 10);
-  if (qty <= 0) return { raw, ok: false, side, error: "Quantity must be greater than 0" };
-  if (parts.length < 3) return { raw, ok: false, side, qty, error: "Need a ticker after the quantity" };
-  const sym = parts[2].toUpperCase();
-  if (!secMap.has(sym)) return { raw, ok: false, side, qty, error: `Unknown ticker "${parts[2]}"` };
-  const rest = parts.slice(3).join("");
-  if (!rest.startsWith("@")) return { raw, ok: false, side, qty, symbol: sym, error: "Missing '@' before the price" };
-  const priceStr = rest.slice(1).trim();
-  const market = priceStr === "";
-  if (!market && !/^\d+(\.\d+)?$/.test(priceStr)) return { raw, ok: false, side, qty, symbol: sym, error: "Price must be a number (or leave blank for @ market)" };
-  const price = market ? null : parseFloat(priceStr);
-  if (!market && (price as number) <= 0) return { raw, ok: false, side, qty, symbol: sym, error: "Price must be greater than 0" };
-  return { raw, ok: true, side, symbol: sym, securityId: secMap.get(sym)!, qty, price, market };
-}
-
-const fmtCmd = (o: any) => `${o.side === "SELL" ? "S" : "B"} ${o.quantity} ${o.symbol} @${o.price != null ? " " + o.price : ""}`;
-
-const EXAMPLES = ["B 100 GP @ 120", "S 50 BRACBANK @", "B 200 SQURPHARMA @ 220"];
 
 /** A placed-order outcome; status is kept live (SSE + poll) until it reaches a terminal state. */
 type Res = { ok: boolean; status?: string; orderRef?: string; orderId?: number; err?: string };
@@ -78,7 +48,7 @@ export default function OrderBotPage() {
     }).catch(() => {});
   }, []);
 
-  const lines = useMemo(() => text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => validate(l, secMap)), [text, secMap]);
+  const lines = useMemo(() => text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => parseCommand(l, secMap)), [text, secMap]);
   const validCount = lines.filter((l) => l.ok).length;
 
   const place = async (l: Line, idx: number) => {

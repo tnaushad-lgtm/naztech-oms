@@ -66,14 +66,23 @@ export function OrderGridLauncher() {
         Order Grid
       </button>
 
+      {/*
+        Narrowed from 1010 to 760 once the columns shrank. The two have to move together: shrinking
+        the columns alone just adds dead space inside the same window, and the point of the exercise
+        is the market the dealer can still see BEHIND this panel.
+
+        The id doubles as the geometry storage key, so it carries a version. Anyone who has opened
+        this panel before has 1010x340 saved and would keep it — seeing none of the narrowing, and
+        reasonably concluding nothing had changed. Bumping the id retires the old box once.
+      */}
       <FloatingPanel
-        id="order-grid"
+        id="order-grid-v2"
         title="Order Grid"
         subtitle="quick multi-order entry"
         open={open}
         onClose={() => setOpen(false)}
-        initial={{ x: 140, y: 120, w: 1010, h: 340 }}
-        minW={720}
+        initial={{ x: 140, y: 120, w: 780, h: 340 }}
+        minW={600}
         minH={200}
       >
         {/* compact: client name, side, ticker, MKT/LMT, price, qty — identifiers live in tooltips */}

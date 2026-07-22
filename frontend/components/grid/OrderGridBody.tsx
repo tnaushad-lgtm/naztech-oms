@@ -35,6 +35,30 @@ import { useLive } from "@/lib/useLive";
 import { get, post } from "@/lib/api";
 import { getSession } from "@/lib/session";
 import { nf, money } from "@/lib/format";
+// The SAME grammar the AI Order Bot uses. Shared rather than reimplemented, so a trader who
+// learns "B 100 GP @ 120" on one screen has not learnt a dialect that only works there.
+import { parseCommand, COMMAND_EXAMPLES } from "@/lib/orderCommand";
+
+/**
+ * Column widths, in one place, because the header and the row cells must agree and nothing enforces
+ * it. COMPACT is the floating panel: it hovers over the book the dealer is trading against, so every
+ * pixel it does not take is a pixel of market they can still see.
+ */
+const W = {
+  compact: {
+    rail: "w-[3px]", check: "w-[14px]", ord: "w-[18px]",
+    client: "w-[122px]", ticker: "w-[80px]", side: "w-[46px]",
+    type: "w-[42px]", validity: "w-[46px]", qty: "w-[60px]", price: "w-[66px]",
+    // SEND is a word, not a glyph, and three icon buttons follow it — 64px clipped it.
+    risk: "w-[70px]", act: "w-[98px]",
+  },
+  full: {
+    rail: "w-[4px]", check: "w-[16px]", ord: "w-[22px]",
+    client: "w-[210px]", ticker: "w-[190px]", side: "w-[104px]",
+    type: "w-[72px]", validity: "w-[76px]", qty: "w-[74px]", price: "w-[84px]",
+    risk: "w-[130px]", act: "w-[76px]",
+  },
+};
 
 type Sec = { securityId: number; symbol: string; name: string; ltp: number; assetClass: string; category?: string };
 type Acct = {
@@ -295,10 +319,15 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     // Where a name is unique it stays clean; where it is not, the last four BO digits ride along.
     const seen = new Map<string, number>();
     for (const a of accts) seen.set(a.name, (seen.get(a.name) || 0) + 1);
+    // The LIST keeps the disambiguator and the CELL drops it. Those are different moments: choosing
+    // is when a wrong account gets picked, so the list must still distinguish nine Imran Ahmeds;
+    // once chosen the row is bound to an id, so the cell can be narrow and leave the BO to the
+    // tooltip — which is what the product owner asked for, without giving up the safety of the pick.
     return accts.map((a) => ({
       id: a.id,
       primary: (seen.get(a.name) || 0) > 1 ? `${a.name} ·${a.boId.slice(-4)}` : a.name,
       secondary: undefined,
+      display: a.name,
       extra: `${a.boId} ${a.name}`,          // still searchable by full BO number
     }));
   }, [accts, compact]);
@@ -379,6 +408,135 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+
+  /**
+   * KEYBOARD GRID — the dBase/COBOL property, which is that the hands never leave the keys.
+   *
+   * Every editable cell carries data-cell="<rowKey>:<col>", so focus can be moved by coordinate
+   * rather than by tab order. Two things make it fast: ArrowUp/ArrowDown walk a COLUMN (enter every
+   * quantity down a list without re-tabbing across), and choosing a value AUTO-ADVANCES to the next
+   * field the way a fixed-width terminal advanced when a field filled.
+   *
+   * Arrows only reach this from the plain text cells. Inside a ComboBox they belong to the option
+   * list, which is why qty and price are type=text — a type=number would have eaten them to
+   * increment the value, which is also how it silently corrupted quantities before.
+   */
+  const COLS = compact
+    ? ["client", "ticker", "side", "type", "validity", "qty", "price"]
+    : ["client", "ticker", "side", "qty", "price"];
+
+  /** Column widths for this mode. Header and cells read the same object so they cannot drift. */
+  const w = compact ? W.compact : W.full;
+
+  const focusCell = useCallback((rowKey: string, col: number) => {
+    const c = Math.max(0, Math.min(COLS.length - 1, col));
+    // Deferred: the caller is usually mid-render (a pick just changed state), and the target may
+    // not exist yet on this tick.
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-cell="${rowKey}:${c}"]`)?.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [COLS.length]);
+
+  const cellProps = (rowKey: string, col: number) => ({ "data-cell": `${rowKey}:${col}` } as any);
+
+  /** ArrowUp/ArrowDown move within a column; everything else is left alone. */
+  const onGridKey = (e: React.KeyboardEvent, rowKey: string) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    const cell = (e.target as HTMLElement)?.getAttribute?.("data-cell");
+    if (!cell) return;
+    const col = Number(cell.split(":").pop());
+    const i = rows.findIndex((r) => r.key === rowKey);
+    const j = e.key === "ArrowDown" ? i + 1 : i - 1;
+    if (i < 0 || j < 0 || j >= rows.length) return;
+    e.preventDefault();
+    setLit(rows[j].key);
+    focusCell(rows[j].key, col);
+  };
+
+  /* ------------------------------------------------------------------ command entry
+   *
+   * "B 100 GP @ 120" fills the lit row and moves to its client field.
+   *
+   * IT FILLS. IT DOES NOT SEND. The grammar carries no client, and the whole reason this grid has
+   * provenance fields is that an order attached to whichever account happened to be selected is the
+   * exact accident that loses money. So the command sets side, quantity, instrument and price —
+   * every one of which the trader literally typed, hence `confirmed` — and leaves the account unset,
+   * which leaves the row un-sendable until a human picks one. Focus lands there next, so the fast
+   * path is: type the order, Enter, type the client, Enter.
+   */
+  const [cmd, setCmd] = useState("");
+  const secMap = useMemo(
+    () => new Map(secs.filter((x) => x.assetClass !== "INDEX").map((x) => [x.symbol.toUpperCase(), x.securityId])),
+    [secs],
+  );
+  const cmdParsed = useMemo(() => (cmd.trim() ? parseCommand(cmd, secMap) : null), [cmd, secMap]);
+
+  const applyCommand = () => {
+    const p = cmdParsed;
+    if (!p?.ok) return;
+    const sec = p.securityId ? byId.get(p.securityId) : null;
+
+    // Land in the lit row when it is still free, otherwise open a new one. Never overwrite an order
+    // that already has an instrument — a fast typist should not be able to clobber the row above.
+    const target = rows.find((r) => r.key === lit && !r.sent?.id && !r.securityId) ?? null;
+    const fill = (r: Row): Row => ({
+      ...r,
+      securityId: p.securityId ?? null,
+      symbolText: p.symbol ?? "",
+      side: p.side as Row["side"],
+      sideProv: "confirmed",                       // typed as B or S — a decision, not a default
+      qty: p.qty ?? null,
+      type: p.market ? "MARKET" : "LIMIT",
+      price: p.market ? null : p.price ?? null,
+      priceProv: p.market ? "unset" : "confirmed",
+      validity: p.market ? "DAY" : r.validity,     // MARKET makes anything else meaningless
+      basis: isBond(sec) ? r.basis : "PRICE",
+      risk: null, sent: null,
+    });
+
+    if (target) {
+      setRows((rs) => rs.map((r) => (r.key === target.key ? fill(r) : r)));
+      setCmd("");
+      focusCell(target.key, 0);
+      return;
+    }
+    const fresh = fill(newRow());
+    setRows((rs) => [...rs, fresh]);
+    setLit(fresh.key);
+    setCmd("");
+    focusCell(fresh.key, 0);
+  };
+
+  /** Multi-line paste — dealers keep instructions in lists, one order per line. */
+  const applyCommandLines = (text: string) => {
+    const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return false;
+    const made: Row[] = [];
+    for (const line of lines) {
+      const p = parseCommand(line, secMap);
+      if (!p.ok) continue;                          // an unparseable line is skipped, never guessed
+      const sec = p.securityId ? byId.get(p.securityId) : null;
+      made.push({
+        ...newRow(),
+        securityId: p.securityId ?? null, symbolText: p.symbol ?? "",
+        side: p.side as Row["side"], sideProv: "confirmed",
+        qty: p.qty ?? null,
+        type: p.market ? "MARKET" : "LIMIT",
+        price: p.market ? null : p.price ?? null,
+        priceProv: p.market ? "unset" : "confirmed",
+        validity: p.market ? "DAY" : DEF.validity,
+        basis: isBond(sec) ? "PRICE" : "PRICE",
+      });
+    }
+    if (!made.length) return false;
+    setRows((rs) => [...rs.filter((r) => r.securityId || r.sent?.id), ...made]);
+    setLit(made[0].key);
+    setCmd("");
+    setToast(`${made.length} row${made.length === 1 ? "" : "s"} filled — each still needs a client`);
+    focusCell(made[0].key, 0);
+    return true;
+  };
 
   const patch = useCallback((key: string, p: Partial<Row>) => {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...p, risk: null, sent: null } : r)));
@@ -635,12 +793,36 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
       <div className="relative flex h-full min-h-0 flex-col gap-2 p-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-obsidian-900/60 px-3 py-2">
-          <div className="text-[11px] text-ink-300">
-            <span className="uppercase tracking-wider text-ink-400">Multi-order entry</span>
-            <span className="ml-2 text-ink-400">
-              paste from Excel · <kbd className="rounded bg-white/10 px-1">Enter</kbd> commits &amp; opens next ·{" "}
-              <kbd className="rounded bg-white/10 px-1">F2</kbd> review before sending
-            </span>
+          {/* COMMAND ENTRY — the shortest path from an instruction to a filled row. */}
+          <div className="relative flex min-w-[240px] flex-1 items-center gap-2">
+            <span className="shrink-0 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">Cmd</span>
+            <input
+              value={cmd}
+              onChange={(e) => setCmd(e.target.value)}
+              onPaste={(e) => {
+                const t = e.clipboardData.getData("text");
+                if (/[\r\n]/.test(t) && applyCommandLines(t)) e.preventDefault();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); applyCommand(); }
+                if (e.key === "Escape") { e.preventDefault(); setCmd(""); }
+              }}
+              placeholder="B 100 GP @ 120"
+              spellCheck={false} autoComplete="off"
+              title="Type an order and press Enter to fill a row. It fills only — the client is still yours to choose, and nothing is sent until you press Send."
+              className={`min-w-0 flex-1 rounded-lg border bg-obsidian-950/60 px-2 py-1 text-[12px] tabular-nums text-ink-100 placeholder:text-ink-500 focus:outline-none focus:ring-1 ${
+                !cmd.trim() ? "border-line/70 focus:border-aurora-cyan focus:ring-aurora-cyan/40"
+                  : cmdParsed?.ok ? "border-bull/60 focus:ring-bull/40"
+                  : "border-amber-400/60 focus:ring-amber-400/40"}`}
+            />
+            {/* Live verdict, so a mistyped ticker is visible before Enter rather than after. */}
+            {cmd.trim() && (
+              <span className={`shrink-0 text-[10px] ${cmdParsed?.ok ? "text-bull" : cmdParsed?.pending ? "text-ink-400" : "text-amber-300"}`}>
+                {cmdParsed?.ok
+                  ? `✓ ${cmdParsed.side === "BUY" ? "Buy" : "Sell"} ${nf(cmdParsed.qty || 0, 0)} ${cmdParsed.symbol} ${cmdParsed.market ? "at market" : `@ ${nf(cmdParsed.price || 0)}`}`
+                  : cmdParsed?.error}
+              </span>
+            )}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {selCount > 0 && (
@@ -707,19 +889,19 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
         )}
 
         {/* column header — fixed grid template shared by every row */}
-        <div className="flex items-center gap-2 rounded-t-lg border-x border-t border-line bg-obsidian-850 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-200">
-          <span className="w-[4px]" /><span className="w-[16px]" /><span className="w-[22px] text-right">#</span>
-          <span className={compact ? "w-[170px]" : "w-[210px]"}>Client</span>
-          <span className={compact ? "w-[120px]" : "w-[190px]"}>Ticker</span>
-          <span className={compact ? "w-[78px]" : "w-[104px]"}>Side</span>
-          {compact && <span className="w-[72px]">Type</span>}
-          {compact && <span className="w-[76px]">Validity</span>}
-          <span className="w-[74px] text-right">Qty</span>
-          <span className="w-[84px] text-right">Price</span>
+        <div className={`flex items-center ${compact ? "gap-1.5" : "gap-2"} rounded-t-lg border-x border-t border-line bg-obsidian-850 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-200 border-x border-t border-line`}>
+          <span className={w.rail} /><span className={w.check} /><span className={`${w.ord} text-right`}>#</span>
+          <span className={w.client}>Client</span>
+          <span className={w.ticker}>Ticker</span>
+          <span className={w.side}>Side</span>
+          {compact && <span className={w.type}>Type</span>}
+          {compact && <span className={w.validity}>Valid</span>}
+          <span className={`${w.qty} text-right`}>Qty</span>
+          <span className={`${w.price} text-right`}>Price</span>
           {!compact && <span className="w-[210px]">Order terms</span>}
           {!compact && <span className="w-[104px] text-right">Value</span>}
-          <span className={compact ? "w-[104px]" : "w-[130px]"}>Risk</span>
-          <span className="w-[76px]" />
+          <span className={w.risk}>Risk</span>
+          <span className={w.act} />
         </div>
 
         {/* the ledger */}
@@ -782,62 +964,95 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                 } ${locked ? "opacity-60" : ""}`}>
 
                 {/* ---------------- line 1 : the ledger line ---------------- */}
-                <div className={`flex items-center gap-2 px-2 ${H} [&>*]:shrink-0`}>
+                <div onKeyDown={(e) => onGridKey(e, r.key)}
+                     className={`flex items-center ${compact ? "gap-1.5" : "gap-2"} px-2 ${H} [&>*]:shrink-0`}>
                   {/* side rail — solid = BUY, hatched = SELL, dashed amber = unconfirmed */}
-                  <span className={`h-full w-[4px] shrink-0 rounded-[2px] ${
+                  <span className={`h-full ${w.rail} shrink-0 rounded-[2px] ${
                     r.sideProv !== "confirmed" ? "border-l-2 border-dashed border-amber-400/80"
                       : locked ? "bg-aurora-indigo" : r.side === "BUY" ? "bg-bull" : "bg-bear"}`}
                     style={r.sideProv === "confirmed" && r.side === "SELL" && !locked ? {
                       backgroundImage: "repeating-linear-gradient(45deg, transparent 0 3px, rgb(255 255 255 / 0.30) 3px 6px)",
                     } : undefined} />
 
-                  <input type="checkbox" className="w-[16px] shrink-0 accent-aurora-cyan" checked={r.sel} disabled={locked}
+                  <input type="checkbox" className={`${w.check} shrink-0 accent-aurora-cyan`} checked={r.sel} disabled={locked}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, sel: e.target.checked } : x)))} />
 
-                  <span className="w-[22px] shrink-0 text-right text-[11px] tabular-nums text-ink-400">{i + 1}</span>
+                  <span className={`${w.ord} shrink-0 text-right text-[11px] tabular-nums text-ink-400`}>{i + 1}</span>
 
                   {/* client — all 13 BO digits always render; family accounts differ in the middle */}
-                  <div className={`${compact ? "w-[170px]" : "w-[210px]"} shrink-0`}
+                  <div className={`${w.client} shrink-0`}
                        title={acct ? `${acct.boId} · ${acct.name}` : "Client BO account"}
                        onClick={(e) => e.stopPropagation()}>
                     {locked ? (
-                      <span className="text-[12px] text-ink-200">{acct?.boId} · {acct?.name}</span>
+                      <span className="text-[12px] text-ink-200">{compact ? acct?.name : `${acct?.boId} · ${acct?.name}`}</span>
                     ) : (
-                      <ComboBox items={acctItems} value={r.accountId} placeholder="BO or name…"
-                        inputProps={{ "data-client-row": r.key } as any}
+                      <ComboBox items={acctItems} value={r.accountId} placeholder={compact ? "client…" : "BO or name…"}
+                        inputProps={{ "data-client-row": r.key, ...cellProps(r.key, 0) }}
                         className={r.accountProv !== "confirmed" ? "rounded ring-1 ring-dashed ring-amber-400/70" : ""}
-                        onChange={(id) => patch(r.key, { accountId: id, accountProv: id ? "confirmed" : "unset" })} />
+                        onChange={(id) => patch(r.key, { accountId: id, accountProv: id ? "confirmed" : "unset" })}
+                        onPicked={() => focusCell(r.key, 1)} />
                     )}
                   </div>
 
                   {/* instrument */}
-                  <div className={`${compact ? "w-[120px]" : "w-[190px]"} shrink-0`}
-                       title={sec ? `${sec.symbol} · ${sec.name}` : "Instrument"}
+                  <div className={`${w.ticker} shrink-0`}
+                       title={sec ? `${sec.symbol} · ${sec.name}${sec.ltp ? ` · LTP ${nf(sec.ltp)}` : ""}` : "Instrument"}
                        onClick={(e) => e.stopPropagation()}>
                     {locked ? (
                       <span className="text-[12px] text-ink-200">{sec?.symbol}</span>
                     ) : (
-                      <ComboBox items={secItems} value={r.securityId} placeholder="ticker or name…"
-                        onChange={(id) => pickSecurity(r.key, id)} />
+                      <ComboBox items={secItems} value={r.securityId} placeholder={compact ? "ticker…" : "ticker or name…"}
+                        inputProps={cellProps(r.key, 1)}
+                        onChange={(id) => pickSecurity(r.key, id)}
+                        onPicked={() => focusCell(r.key, 2)} />
                     )}
                   </div>
 
-                  {/* side — one click, always visible, never a dropdown */}
-                  <div className={`${compact ? "w-[78px]" : "w-[104px]"} shrink-0`} onClick={(e) => e.stopPropagation()}>
+                  {/*
+                    SIDE — two letters, one keystroke.
+                    
+                    B and S are the product owner's ask and they buy real width, but letter keys were
+                    banned from the qualifier band for a good reason: there, "s" means SELL, STOP and
+                    SPOT across three adjacent groups. That ambiguity does not exist here. This cell
+                    is focusable on its own and has exactly two values, so b and s can only mean one
+                    thing each. The ban is narrowed deliberately, not forgotten.
+
+                    Unchosen still reads as unchosen — dashed amber, neither letter filled — because a
+                    side nobody picked must never render like a side somebody picked.
+                  */}
+                  <div className={`${w.side} shrink-0`} onClick={(e) => e.stopPropagation()}>
                     {compact ? (
-                      <select
-                        disabled={locked}
-                        value={r.sideProv === "confirmed" ? r.side : ""}
-                        onChange={(e) => patch(r.key, { side: e.target.value as Row["side"], sideProv: "confirmed" })}
-                        className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[12px] font-bold ${
-                          r.sideProv !== "confirmed" ? "border-dashed border-amber-400/80 text-amber-300"
-                            : r.side === "BUY" ? "text-bull" : "text-bear"}`}>
-                        {/* An empty first option so an unchosen side reads as unchosen, not as BUY. */}
-                        <option value="" className="bg-obsidian-850 text-amber-300">— side —</option>
-                        <option value="BUY" className="bg-obsidian-850 text-bull">BUY</option>
-                        <option value="SELL" className="bg-obsidian-850 text-bear">SELL</option>
-                      </select>
+                      <div
+                        {...cellProps(r.key, 2)}
+                        tabIndex={locked ? -1 : 0}
+                        role="group" aria-label="Side"
+                        title={r.sideProv === "confirmed" ? (r.side === "BUY" ? "Buy" : "Sell") : "Side not chosen — press B or S"}
+                        onKeyDown={(e) => {
+                          if (locked) return;
+                          const k = e.key.toLowerCase();
+                          if (k !== "b" && k !== "s") return;
+                          e.preventDefault();
+                          patch(r.key, { side: k === "b" ? "BUY" : "SELL", sideProv: "confirmed" });
+                          focusCell(r.key, 5);          // straight on to quantity
+                        }}
+                        className={`flex overflow-hidden rounded border text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-aurora-cyan ${
+                          r.sideProv !== "confirmed" ? "border-dashed border-amber-400/80" : "border-line/70"}`}>
+                        {(["BUY", "SELL"] as const).map((sd) => {
+                          const on = r.sideProv === "confirmed" && r.side === sd;
+                          return (
+                            <button key={sd} type="button" disabled={locked} tabIndex={-1}
+                              title={sd === "BUY" ? "Buy" : "Sell"}
+                              onClick={() => { patch(r.key, { side: sd, sideProv: "confirmed" }); focusCell(r.key, 5); }}
+                              className={`flex-1 py-0.5 transition-colors ${
+                                on ? (sd === "BUY" ? "bg-bull text-obsidian-950" : "bg-bear text-obsidian-950")
+                                   : r.sideProv !== "confirmed" ? "text-amber-300 hover:bg-white/10"
+                                   : "text-ink-400 hover:bg-white/10"}`}>
+                              {sd === "BUY" ? "B" : "S"}
+                            </button>
+                          );
+                        })}
+                      </div>
                     ) : (
                       <SegGroup label="Side" size="md" segs={SIDE_SEGS} value={r.side} showDigits
                         unconfirmed={r.sideProv !== "confirmed"} disabled={locked}
@@ -846,8 +1061,9 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   </div>
 
                   {compact && (
-                    <div className="w-[72px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <div className={`${w.type} shrink-0`} onClick={(e) => e.stopPropagation()}>
                       <select
+                        {...cellProps(r.key, 3)}
                         disabled={locked} value={r.type}
                         onChange={(e) => {
                           const v = e.target.value as Row["type"];
@@ -856,7 +1072,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                             ? { type: "MARKET", validity: "DAY", basis: "PRICE", orderYield: null }
                             : { type: v });
                         }}
-                        className="w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[11px] font-semibold text-ink-100">
+                        className="w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1 py-0.5 text-[11px] font-semibold text-ink-100">
                         <option value="LIMIT" className="bg-obsidian-850">LMT</option>
                         <option value="MARKET" className="bg-obsidian-850">MKT</option>
                       </select>
@@ -864,12 +1080,13 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   )}
 
                   {compact && (
-                    <div className="w-[76px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <div className={`${w.validity} shrink-0`} onClick={(e) => e.stopPropagation()}>
                       <select
+                        {...cellProps(r.key, 4)}
                         disabled={locked} value={r.validity}
                         onChange={(e) => patch(r.key, { validity: e.target.value })}
                         title="How long the order lives. Day expires at the close."
-                        className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-[11px] font-semibold ${
+                        className={`w-full rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1 py-0.5 text-[11px] font-semibold ${
                           r.validity === DEF.validity ? "text-ink-200" : "text-aurora-violet"}`}>
                         {VALID_SEGS.map((v) => (
                           <option key={v.value} value={v.value} className="bg-obsidian-850">{v.value}</option>
@@ -880,16 +1097,18 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
 
                   {/* qty — type=text so arrow keys navigate rows instead of decrementing the value */}
                   <input value={r.qty ?? ""} disabled={locked} inputMode="decimal"
+                    {...cellProps(r.key, compact ? 5 : 3)}
                     onClick={(e) => e.stopPropagation()}
                     onPaste={(e) => onPaste(e, r.key)}
                     onChange={(e) => patch(r.key, { qty: num(e.target.value) })}
-                    className="w-[74px] shrink-0 rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums text-ink-100" />
+                    className={`${w.qty} shrink-0 rounded border border-line/70 bg-white/[0.05] hover:border-aurora-cyan/40 focus:border-aurora-cyan focus:bg-white/[0.09] focus:outline-none px-1.5 py-0.5 text-right text-[12px] tabular-nums text-ink-100`} />
 
                   {/* price — ~ marks a derived value that is not what gets transmitted */}
-                  <div className="relative w-[84px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div className={`relative ${w.price} shrink-0`} onClick={(e) => e.stopPropagation()}>
                     {r.basis === "YIELD" && <span className="absolute -left-1 top-1 text-[10px] text-aurora-cyan">~</span>}
                     <input
                       value={r.type === "MARKET" ? "" : r.basis === "YIELD" ? nf(r.price || 0, 2) : r.price ?? ""}
+                      {...cellProps(r.key, compact ? 6 : 4)}
                       disabled={locked || r.type === "MARKET" || r.basis === "YIELD"} inputMode="decimal"
                       placeholder={r.type === "MARKET" ? "mkt" : ""}
                       title={r.priceProv === "defaulted" ? "Seeded from the last traded price — edit it or leave it" : undefined}
@@ -917,7 +1136,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   )}
 
                   {/* risk — fixed width so a verdict never moves anything */}
-                  <span className={`${compact ? "w-[104px]" : "w-[130px]"} shrink-0 truncate text-[11px]`} title={r.risk?.reason || ""}>
+                  <span className={`${w.risk} shrink-0 truncate text-[11px]`} title={r.risk?.reason || ""}>
                     {locked ? (
                       <span className="text-ink-300">
                         #{r.sent!.id} · <span className={statusTone(r.sent!.status)}>{statusText(r.sent!.status)}</span>
@@ -932,9 +1151,20 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       : <span className="text-bear">✕ {r.risk.reason}</span>}
                   </span>
 
-                  <span className="flex w-[76px] shrink-0 justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)} title="Send this row"
-                      className="rounded border border-line px-1 text-[10px] text-ink-300 disabled:opacity-25 hover:bg-white/5">↵</button>
+                  <span className={`flex ${w.act} shrink-0 justify-end gap-1`} onClick={(e) => e.stopPropagation()}>
+                    {/*
+                      SEND, on every row and labelled as such.
+                      
+                      It was a bare "↵" before, which reads as a hint about the Enter key rather than
+                      as a button that sends an order to an exchange. The guard is unchanged:
+                      sendable() requires risk.pass === true, so a row that has not passed the
+                      pre-trade check cannot be sent from here any more than from Send all.
+                    */}
+                    <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)}
+                      title={sendable(r, sec) ? "Send this order now" : "Not ready — see the risk column"}
+                      className="rounded border border-bull/50 bg-bull/15 px-1 text-[10px] font-bold text-bull transition-colors disabled:border-line disabled:bg-transparent disabled:text-ink-500 disabled:opacity-40 hover:bg-bull/25">
+                      SEND
+                    </button>
                     {compact && (
                       <button
                         onClick={() => setMoreRow((k) => (k === r.key ? null : r.key))}

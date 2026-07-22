@@ -25,6 +25,14 @@ export type ComboItem = {
   secondary?: string;
   /** Extra text that should match but need not be displayed. */
   extra?: string;
+  /**
+   * What the CLOSED cell shows, when that must be shorter than what the open list shows.
+   *
+   * These are different jobs. The list is where a wrong pick happens, so it must disambiguate —
+   * 501 of 506 client accounts share a name. The closed cell is already bound to one id, so it can
+   * afford to be narrow and leave the rest to the tooltip.
+   */
+  display?: string;
   disabled?: boolean;
 };
 
@@ -62,6 +70,7 @@ export function ComboBox({
   inputProps = {},
   emptyLabel = "no match",
   maxResults = 60,
+  onPicked,
 }: {
   items: ComboItem[];
   value: number | null;
@@ -73,6 +82,8 @@ export function ComboBox({
   inputProps?: React.InputHTMLAttributes<HTMLInputElement>;
   emptyLabel?: string;
   maxResults?: number;
+  /** Called after an explicit pick, so a caller can move focus onward. */
+  onPicked?: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -115,7 +126,11 @@ export function ComboBox({
 
   const commit = (item?: ComboItem) => {
     const pick = item ?? results[active]?.item;
-    if (pick && !pick.disabled) onChange(pick.id);
+    if (pick && !pick.disabled) {
+      onChange(pick.id);
+      // Fired only on a real pick, never on an abandon — auto-advance must follow a decision.
+      onPicked?.(pick.id);
+    }
     setOpen(false);
     setQ("");
   };
@@ -146,7 +161,11 @@ export function ComboBox({
   };
 
   // Closed state shows the chosen value; focused state shows what you are typing.
-  const shown = open ? q : selected ? selected.primary + (selected.secondary ? ` · ${selected.secondary}` : "") : "";
+  const shown = open
+    ? q
+    : selected
+      ? selected.display ?? selected.primary + (selected.secondary ? ` · ${selected.secondary}` : "")
+      : "";
 
   return (
     <div ref={wrap} className={`relative ${className}`}>
