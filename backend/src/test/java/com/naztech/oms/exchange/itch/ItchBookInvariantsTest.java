@@ -26,6 +26,46 @@ class ItchBookInvariantsTest {
         assertThat(r.violations()).anyMatch(s -> s.contains("crossed"));
     }
 
+    /**
+     * The shape of the bug this test exists to prevent.
+     *
+     * A venue does not delete every resting order at the close; it publishes a System Event and the
+     * book is void from that point. The gateway decoded [S] and ignored it, so nothing ever emptied
+     * the books — and because a reconnect replays from sequence one across several sessions, each
+     * session's leftovers piled onto the last. Enough stale bids outliving the offers that traded
+     * against them produces a CROSSED book, which is arithmetically impossible on a real venue.
+     *
+     * Observed against nFIX on 2026-07-22: 273 of 306 instruments crossed, ACI showing a 239.90 bid
+     * against a 239.60 ask while the venue itself showed a clean 239.60 / 239.70.
+     */
+    @Test
+    void a_session_boundary_must_empty_the_book_or_stale_orders_cross_it() {
+        ItchOrderBook b = new ItchOrderBook();
+
+        // yesterday: a bid that will never be deleted explicitly, because the close voids it
+        b.add(1, 'B', 23_990, 100);
+        assertThat(b.restingOrderCount()).isEqualTo(1);
+
+        // the session boundary — what ItchGateway.onSystemEvent now does on O/S/C/E
+        b.clear();
+        assertThat(b.restingOrderCount()).isZero();
+
+        // today: an offer BELOW yesterday's bid. Legal on a fresh book, impossible if the bid survived.
+        b.add(2, 'S', 23_960, 700);
+        b.add(3, 'B', 23_950, 220);
+        assertThat(ItchBookInvariants.check(b, 2, 10).ok())
+                .as("a book rebuilt after the boundary must not be crossed")
+                .isTrue();
+
+        // and the counter-proof: without the clear, the same two days cross.
+        ItchOrderBook stale = new ItchOrderBook();
+        stale.add(1, 'B', 23_990, 100);      // yesterday, never cleared
+        stale.add(2, 'S', 23_960, 700);      // today
+        assertThat(ItchBookInvariants.check(stale, 2, 10).ok())
+                .as("this is what the feed produced before the fix")
+                .isFalse();
+    }
+
     @Test
     void clean_two_sided_book_passes() {
         ItchOrderBook b = new ItchOrderBook();

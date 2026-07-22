@@ -59,6 +59,14 @@ public class ItchProperties {
     private boolean record = false;
     private String recordFile;
 
-    /** Opt-in: run order-book invariant checks each tick and log any violations. */
-    private boolean validate = false;
+    /**
+     * Run order-book invariant checks each tick and log any violations.
+     *
+     * Now ON by default. It was opt-in and off, which is why a book crossed on 273 of 306
+     * instruments for days without a single warning — the detector existed and nobody had switched
+     * it on. A crossed book is arithmetically impossible on a real venue, so if these checks fire in
+     * production something is genuinely wrong with the feed or with our reconstruction of it, and
+     * that is worth a log line every 1.2s tick.
+     */
+    private boolean validate = true;
 }

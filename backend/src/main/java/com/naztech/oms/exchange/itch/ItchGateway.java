@@ -373,6 +373,38 @@ public class ItchGateway implements MarketDataGateway {
     /** Round-trip through the binary codec, exactly as a real client decodes the wire. */
     private Itch.Msg wire(Itch.Msg m) { return ItchCodec.decode(ItchCodec.encode(m)); }
 
+    /**
+     * A session boundary empties the book — and until this existed, ours never emptied.
+     *
+     * An exchange does not send an Order Delete for every resting order at the close; it publishes a
+     * System Event and the book is simply void from that point. We decoded [S] and then ignored it,
+     * so every session's leftovers accumulated. Because a reconnect replays from sequence one, and
+     * that history spans several trading sessions, the books were carrying days of phantom liquidity:
+     * more levels than the venue shows, inflated size at shared prices, and — once enough stale bids
+     * outlived the offers that had traded against them — a CROSSED book, bid above ask, on 273 of 306
+     * instruments. A crossed book is not a cosmetic problem: it inverts spread, microprice and
+     * imbalance, and it is arithmetically impossible on a real venue, so anything reading it is
+     * reading a fiction.
+     *
+     * Standard ITCH event codes: O start of messages, S start of system hours, Q start of market
+     * hours, M end of market hours, E end of system hours, C end of messages. Anything that opens or
+     * closes a session invalidates the book, so both ends clear it; the replay that follows rebuilds
+     * the current session from its own messages.
+     */
+    private void onSystemEvent(Itch.SystemEvent s) {
+        char code = Character.toUpperCase(s.eventCode());
+        boolean boundary = code == 'O' || code == 'S' || code == 'C' || code == 'E';
+        if (!boundary) {
+            log.info("ITCH system event '{}' — no book action", code);
+            return;
+        }
+        int n = books.size();
+        for (ItchOrderBook b : books.values()) b.clear();
+        orderToSecurity.clear();
+        log.info("ITCH system event '{}' (session boundary) — cleared {} book(s); the book that follows "
+                + "belongs to the new session", code, n);
+    }
+
     private void route(Itch.Msg m) {
         switch (m.type()) {
             case 'A' -> { Itch.AddOrder a = (Itch.AddOrder) m;
@@ -396,7 +428,8 @@ public class ItchGateway implements MarketDataGateway {
                 if (sid != null) { book(sid).apply(u); orderToSecurity.put(u.newOrderNumber(), sid); } }
             case 'Q' -> onTrade((Itch.Trade) m);
             case 'Z' -> onIndex((Itch.IndexValue) m);
-            default -> { /* T/S/R/H/O/I/N — not book-affecting here */ }
+            case 'S' -> onSystemEvent((Itch.SystemEvent) m);
+            default -> { /* T/R/H/O/I/N — not book-affecting here */ }
         }
     }
 
