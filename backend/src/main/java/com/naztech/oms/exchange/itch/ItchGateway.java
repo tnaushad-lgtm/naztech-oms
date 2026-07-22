@@ -62,6 +62,11 @@ public class ItchGateway implements MarketDataGateway {
     private final List<Long> indexIds = new ArrayList<>();
     /** Trades seen while draining a tick, persisted after the lock is released — see {@link #tick()}. */
     private final List<PendingTrade> pendingTrades = new ArrayList<>();
+    /**
+     * Books touched by messages in the current tick. Only these are re-published, so per-tick work is
+     * proportional to what the market actually did rather than to how many instruments are listed.
+     */
+    private final java.util.Set<Long> dirty = new java.util.HashSet<>();
     private final Object lock = new Object();
     private final Random rnd = new Random();
     private ItchSource source;
@@ -328,24 +333,52 @@ public class ItchGateway implements MarketDataGateway {
      * by a second OMS instance, or by anything else that needs it. Today the book lives in a HashMap
      * here and nowhere else: restart the process and the depth is simply gone.
      */
+    /**
+     * Push only the books that MOVED this tick.
+     *
+     * This used to rebuild and publish all 306 books every 1.2s — 306 depth constructions and 306
+     * Valkey round-trips per tick, inside the lock that UI depth requests also need. In a normal
+     * market a handful of instruments change in any 1.2s window, so the other three hundred were
+     * being recomputed and re-sent identically, and every page load queued behind that work. Pages
+     * were taking 5-14 seconds.
+     */
     private void snapshotDepth() {
-        if (!hot.isLive()) {
+        if (!hot.isLive() || dirty.isEmpty()) {
+            dirty.clear();
             return;
         }
-        for (Long securityId : books.keySet()) {
+        for (Long securityId : dirty) {
             ItchOrderBook b = books.get(securityId);
             if (b == null) continue;
             hot.putDepth(securityId, b.depth(symbols.getOrDefault(securityId, "?"), ltp(securityId),
                     PRICE_DECIMALS, DEPTH_LEVELS));
         }
+        dirty.clear();
     }
 
     /** Opt-in ({@code itch.validate=true}): surface any order-book invariant violations from the live feed. */
+    /**
+     * Check a rotating slice of the universe rather than all of it every tick.
+     *
+     * Checking 306 books each 1.2s doubled the per-tick work for no extra safety: a crossed book is
+     * a persistent state, not a one-frame flicker, so sampling still catches it — just within about
+     * twenty seconds instead of one. That is the right trade for a check that runs while holding the
+     * lock the UI needs.
+     */
+    private static final int VALIDATE_PER_TICK = 16;
+    private int validateCursor = 0;
+
     private void validateBooks() {
-        for (Map.Entry<Long, ItchOrderBook> e : books.entrySet()) {
-            ItchBookInvariants.Report r = ItchBookInvariants.check(e.getValue(), PRICE_DECIMALS, 10);
-            if (!r.ok()) log.warn("ITCH book invariant [{}]: {}", symbols.getOrDefault(e.getKey(), "?"), r.violations());
+        if (books.isEmpty()) return;
+        List<Long> ids = new ArrayList<>(books.keySet());
+        for (int i = 0; i < Math.min(VALIDATE_PER_TICK, ids.size()); i++) {
+            Long id = ids.get((validateCursor + i) % ids.size());
+            ItchOrderBook b = books.get(id);
+            if (b == null) continue;
+            ItchBookInvariants.Report r = ItchBookInvariants.check(b, PRICE_DECIMALS, 10);
+            if (!r.ok()) log.warn("ITCH book invariant [{}]: {}", symbols.getOrDefault(id, "?"), r.violations());
         }
+        validateCursor = (validateCursor + VALIDATE_PER_TICK) % ids.size();
     }
 
     // ------------------------------------------------------------------ MarketDataGateway
@@ -401,6 +434,7 @@ public class ItchGateway implements MarketDataGateway {
         int n = books.size();
         for (ItchOrderBook b : books.values()) b.clear();
         orderToSecurity.clear();
+        dirty.addAll(books.keySet());   // every book just changed — republish them all once
         log.info("ITCH system event '{}' (session boundary) — cleared {} book(s); the book that follows "
                 + "belongs to the new session", code, n);
     }
@@ -408,24 +442,24 @@ public class ItchGateway implements MarketDataGateway {
     private void route(Itch.Msg m) {
         switch (m.type()) {
             case 'A' -> { Itch.AddOrder a = (Itch.AddOrder) m;
-                if (!Itch.isReferencePrice(a)) { orderToSecurity.put(a.orderNumber(), a.orderbook()); book(a.orderbook()).apply(a); } }
+                if (!Itch.isReferencePrice(a)) { orderToSecurity.put(a.orderNumber(), a.orderbook()); book(a.orderbook()).apply(a); dirty.add(a.orderbook()); } }
             case 'F' -> { Itch.AddOrderParticipant f = (Itch.AddOrderParticipant) m;
-                orderToSecurity.put(f.orderNumber(), f.orderbook()); book(f.orderbook()).apply(f); }
+                orderToSecurity.put(f.orderNumber(), f.orderbook()); book(f.orderbook()).apply(f); dirty.add(f.orderbook()); }
             case 'E' -> { Itch.OrderExecuted e = (Itch.OrderExecuted) m; Long sid = orderToSecurity.get(e.orderNumber());
                 if (sid != null) {
                     long rawPx = book(sid).priceOf(e.orderNumber());   // resting price, read before the fill removes it
-                    book(sid).apply(e);
+                    book(sid).apply(e); dirty.add(sid);
                     recordTrade(sid, rawPx, e.execQty(), e.ts());       // [E] prints at the resting order's price
                 } }
             case 'C' -> { Itch.OrderExecutedWithPrice c = (Itch.OrderExecutedWithPrice) m; Long sid = orderToSecurity.get(c.orderNumber());
                 if (sid != null) {
-                    book(sid).apply(c);
+                    book(sid).apply(c); dirty.add(sid);
                     if (c.printable() != 'N') recordTrade(sid, c.execPrice(), c.execQty(), c.ts());   // [C] carries its own price
                 } }
             case 'D' -> { Itch.OrderDelete d = (Itch.OrderDelete) m; Long sid = orderToSecurity.remove(d.orderNumber());
-                if (sid != null) book(sid).apply(d); }
+                if (sid != null) { book(sid).apply(d); dirty.add(sid); } }
             case 'U' -> { Itch.OrderReplace u = (Itch.OrderReplace) m; Long sid = orderToSecurity.remove(u.origOrderNumber());
-                if (sid != null) { book(sid).apply(u); orderToSecurity.put(u.newOrderNumber(), sid); } }
+                if (sid != null) { book(sid).apply(u); orderToSecurity.put(u.newOrderNumber(), sid); dirty.add(sid); } }
             case 'Q' -> onTrade((Itch.Trade) m);
             case 'Z' -> onIndex((Itch.IndexValue) m);
             case 'S' -> onSystemEvent((Itch.SystemEvent) m);
