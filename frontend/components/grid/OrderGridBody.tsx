@@ -265,6 +265,15 @@ function NumCell({
 }) {
   const [text, setText] = useState(value == null ? "" : String(value));
   const editing = useRef(false);
+  /**
+   * True between the focusing mousedown and its mouseup.
+   *
+   * onFocus selects the whole value so typing overwrites it — but the very click that caused the
+   * focus then finishes with a mouseup, and the browser collapses the selection to a caret at the
+   * click point. So clicking into a seeded price and typing still PREPENDED. Suppressing only that
+   * one mouseup preserves the selection, while a second click still positions the caret normally.
+   */
+  const focusingClick = useRef(false);
 
   useEffect(() => {
     if (!editing.current) setText(value == null ? "" : String(value));
@@ -282,9 +291,15 @@ function NumCell({
       inputMode="decimal"
       autoComplete="off"
       onPaste={onPaste}
-      onFocus={(e) => { editing.current = true; e.currentTarget.select(); }}
+      onFocus={(e) => { editing.current = true; focusingClick.current = true; e.currentTarget.select(); }}
+      onMouseUp={(e) => {
+        if (!focusingClick.current) return;
+        focusingClick.current = false;
+        e.preventDefault();          // keep the selection onFocus just made
+      }}
       onBlur={() => {
         editing.current = false;
+        focusingClick.current = false;
         // Tidy a half-typed value on the way out: "301." settles to "301", "" stays empty.
         setText(value == null ? "" : String(value));
       }}
@@ -1183,7 +1198,17 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                 title={rowTitle}
                 onClick={() => !audit && setLit(r.key)}
                 onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.shiftKey) return;
+                  /*
+                   * Let the MODIFIED chord through untouched.
+                   *
+                   * This handler used to catch Ctrl+Enter too, so the keyboard-send shortcut ran
+                   * commitAndNext() first: a blank row was appended, `lit` moved onto it, and the
+                   * window-level send handler then judged that new empty row and refused with "Row
+                   * is incomplete." — printed beside a row that plainly read "✓ pass". The shortcut
+                   * looked dead, said something untrue, and quietly grew a blank row per attempt.
+                   * It works when focus is outside a row, which is what made it look intermittent.
+                   */
+                  if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey) return;
                   e.preventDefault();
                   commitAndNext(r.key);
                 }}
