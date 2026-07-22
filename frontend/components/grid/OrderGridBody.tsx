@@ -267,6 +267,13 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
   const [busy, setBusy] = useState(false);
   /** Row whose client field should take focus once React has rendered it. */
   const [focusRow, setFocusRow] = useState<string | null>(null);
+  /**
+   * Compact hides the settings band to stay one line per order. That is right for the 95% of orders
+   * that are a plain limit on the normal market — but it must not make the other 5% impossible.
+   * This opens the band for ONE row on demand, so market, price-basis and stop stay reachable
+   * without turning the whole window back into the full screen.
+   */
+  const [moreRow, setMoreRow] = useState<string | null>(null);
   const [toast, setToast] = useState("");
 
   const byId = useMemo(() => new Map(secs.map((s) => [s.securityId, s])), [secs]);
@@ -690,6 +697,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
           <span className={compact ? "w-[120px]" : "w-[190px]"}>Ticker</span>
           <span className={compact ? "w-[78px]" : "w-[104px]"}>Side</span>
           {compact && <span className="w-[72px]">Type</span>}
+          {compact && <span className="w-[76px]">Validity</span>}
           <span className="w-[74px] text-right">Qty</span>
           <span className="w-[84px] text-right">Price</span>
           {!compact && <span className="w-[210px]">Order terms</span>}
@@ -839,6 +847,21 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                     </div>
                   )}
 
+                  {compact && (
+                    <div className="w-[76px] shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        disabled={locked} value={r.validity}
+                        onChange={(e) => patch(r.key, { validity: e.target.value })}
+                        title="How long the order lives. Day expires at the close."
+                        className={`w-full rounded bg-transparent px-1 py-0.5 text-[11px] font-semibold outline-none focus:bg-white/[0.06] ${
+                          r.validity === DEF.validity ? "text-ink-300" : "text-aurora-violet"}`}>
+                        {VALID_SEGS.map((v) => (
+                          <option key={v.value} value={v.value} className="bg-obsidian-850">{v.value}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* qty — type=text so arrow keys navigate rows instead of decrementing the value */}
                   <input value={r.qty ?? ""} disabled={locked} inputMode="decimal"
                     onClick={(e) => e.stopPropagation()}
@@ -896,6 +919,14 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                   <span className="flex w-[76px] shrink-0 justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                     <button disabled={!sendable(r, sec)} onClick={() => sendRow(r)} title="Send this row"
                       className="rounded border border-line px-1 text-[10px] text-ink-300 disabled:opacity-25 hover:bg-white/5">↵</button>
+                    {compact && (
+                      <button
+                        onClick={() => setMoreRow((k) => (k === r.key ? null : r.key))}
+                        title="Market, price basis and stop for this row"
+                        className={`rounded border px-1 text-[10px] ${
+                          moreRow === r.key ? "border-aurora-cyan/50 bg-aurora-cyan/15 text-aurora-cyan"
+                                            : "border-line text-ink-400 hover:text-ink-100"}`}>⋯</button>
+                    )}
                     <button onClick={() => duplicateRow(r.key)} title="Duplicate this row"
                       className="rounded border border-line px-1 text-[10px] text-ink-400 hover:text-ink-100">⧉</button>
                     <button onClick={() => removeRow(r.key)} title="Remove this row"
@@ -908,7 +939,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                     to someone who already knows this screen — a trader meeting it for the first time
                     sees "NORMAL SPOT BLOCK ODD-LOT FOREIGN" and has no way to learn that those are
                     settlement markets rather than order types. The label is not decoration. */}
-                {isLit && !locked && !compact && (
+                {((isLit && !locked && !compact) || (compact && !locked && moreRow === r.key)) && (
                   <div className="flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-aurora-cyan/10 bg-obsidian-950/25 px-2 py-1.5 pl-[46px]">
                     <span className="-ml-3 select-none text-ink-500">╰</span>
 
@@ -924,6 +955,7 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                       </Group>
                     )}
 
+                    {!compact && (
                     <Group name="Order type" hint="Limit = your price or better. Market = fill at the best available price.">
                       <SegGroup label="Order type" segs={TYPE_SEGS} value={r.type} defaultValue="LIMIT" showDigits
                         onChange={(v) =>
@@ -939,16 +971,28 @@ export function OrderGridBody({ onClose, compact = false, seed, onConnected }: {
                           className="ml-1 w-[68px] rounded bg-white/[0.06] px-1 text-right text-[11px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.1]" />
                       )}
                     </Group>
+                    )}
+
+                    {/* compact keeps type on line 1, but a STOP still needs somewhere to put its trigger */}
+                    {compact && r.type.startsWith("STOP") && (
+                      <Group name="Stop trigger" hint="The price at which this stop order activates">
+                        <input value={r.stop ?? ""} inputMode="decimal" placeholder="trigger"
+                          onChange={(e) => patch(r.key, { stop: num(e.target.value) })}
+                          className="w-[76px] rounded bg-white/[0.06] px-1 text-right text-[11px] tabular-nums text-ink-100 outline-none focus:bg-white/[0.1]" />
+                      </Group>
+                    )}
 
                     <Group name="Market" hint="Which DSE market the order trades in. Normal is the public market, T+2.">
                       <SegGroup label="Market" segs={WINDOW_SEGS} value={r.window} defaultValue="NORMAL" showDigits
                         onChange={(v) => patch(r.key, { window: v })} />
                     </Group>
 
-                    <Group name="Validity" hint="How long the order lives. Day expires at the close.">
-                      <SegGroup label="Validity" segs={VALID_SEGS} value={r.validity} defaultValue="DAY" showDigits
-                        onChange={(v) => patch(r.key, { validity: v })} />
-                    </Group>
+                    {!compact && (
+                      <Group name="Validity" hint="How long the order lives. Day expires at the close.">
+                        <SegGroup label="Validity" segs={VALID_SEGS} value={r.validity} defaultValue="DAY" showDigits
+                          onChange={(v) => patch(r.key, { validity: v })} />
+                      </Group>
+                    )}
 
                     <span className="ml-auto flex items-center gap-3 text-[12px] text-ink-400">
                       {/* Buying power of the CHOSEN client. Without it a trader sizes an order blind

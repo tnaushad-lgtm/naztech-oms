@@ -72,8 +72,8 @@ export function OrderGridLauncher() {
         subtitle="quick multi-order entry"
         open={open}
         onClose={() => setOpen(false)}
-        initial={{ x: 140, y: 120, w: 900, h: 340 }}
-        minW={620}
+        initial={{ x: 140, y: 120, w: 1010, h: 340 }}
+        minW={720}
         minH={200}
       >
         {/* compact: client name, side, ticker, MKT/LMT, price, qty — identifiers live in tooltips */}
