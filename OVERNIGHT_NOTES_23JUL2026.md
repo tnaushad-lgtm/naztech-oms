@@ -81,11 +81,38 @@ That is precisely the accident this grid's provenance rules were built after. Ev
 marked as your decision; the account stays yours to choose. If he wants Enter to place directly, say
 so and I will build it.
 
+## Late addition — two more defects, both mine
+
+The adversarial verifiers finished after I wrote the section above and caught two faults in work I
+had committed an hour earlier. **Both were scored PASS by my own test**, which is the more useful
+lesson.
+
+**Ctrl+Enter did not actually send.** The per-row Enter handler also caught the modified chord, so
+Ctrl+Enter committed the row and opened a *new blank one* first; the send handler then judged that
+empty row and refused with "Row is incomplete." — printed beside a row plainly reading `✓ pass 45`.
+It worked only when focus was outside a row, which is what made it look intermittent. My test had
+asserted "sends **or** explains" and accepted the toast as the explain branch. A test that accepts
+either outcome tests nothing. It now requires an order id to appear and no "incomplete" message.
+
+**Clicking into the price still prepended.** Select-on-focus was correct, but the mouseup that
+completes the focusing click collapses the selection back to a caret. My test pressed `Ctrl+A`
+first — which no trader does — so it never saw it. Only that one mouseup is now suppressed; a second
+click still positions the caret normally.
+
+Both fixed and verified by clicking rather than keyboard-shortcutting: Ctrl+Enter from inside a row
+sends (order #70892), spawns no blank row, no false message; typing over a seeded price replaces it.
+
+**13/13 regression checks pass, no page errors.**
+
 ## Still open
 
 - **Intermittent "Loading order grid…"** — one QA agent hit a panel that never resolved, with no
-  4xx/5xx and no page error. It did not reproduce, and the machine was running eight browsers at the
-  time, so it may be a load artifact. Worth watching; if you see it, tell me.
+  4xx/5xx and no page error. I could not reproduce it in three later runs (the panel loads with all
+  7 cells), and the machine was running eight browsers at the time, so it looks like a load
+  artifact. Worth watching; if you see it, tell me.
+- The Python market-data service on **:8091 is not running**, so `/ai/forecast` calls fail in the
+  console. Per CLAUDE.md the OMS runs without it — start it with `start-marketdata.bat` if you want
+  the AI outlook chip back.
 - The chart work from earlier (advanced chart, indicator picker, crosshair readout) is committed and
   unaffected.
 - `backend/.../MarketDataRepo.java` is still your uncommitted edit — untouched all session.
