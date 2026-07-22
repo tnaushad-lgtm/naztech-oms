@@ -12,18 +12,24 @@
  * line, an execution as a marker on the bar it printed in. On a public chart you look at the market;
  * here you look at your position in it. Nothing else on the screen can answer "where am I relative to
  * where it has traded" in one glance.
+ *
+ * Indicators are INSTANCES from lib/indicatorCatalogue, not fixed toggles — EMA(9) and EMA(21) are
+ * two instances of one indicator, each with its own period and colour. See that file for why the
+ * original registry could not express that.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Shell } from "@/components/Shell";
 import { ComboBox, ComboItem } from "@/components/ComboBox";
+import { IndicatorDialog } from "@/components/IndicatorDialog";
 import { useLive } from "@/lib/useLive";
 import { get, API } from "@/lib/api";
 import { nf } from "@/lib/format";
 import { chartBase, candleColours, cssRGB } from "@/lib/chartTheme";
+import { Candle, heikinAshi } from "@/lib/indicators";
 import {
-  Candle, Point, sma, ema, rsi, bollinger, macd, vwap, atr, heikinAshi,
-} from "@/lib/indicators";
+  Applied, byId, describe, migrateLegacy, newApplied, reviveApplied,
+} from "@/lib/indicatorCatalogue";
 
 type Sec = { securityId: number; symbol: string; name: string; ltp: number; assetClass: string; changePct?: number };
 type Order = {
@@ -48,32 +54,56 @@ const TYPES = [
   { k: "area", label: "Area" },
 ] as const;
 
-/** Price-pane overlays. Each returns one or more line series. */
-const OVERLAYS = [
-  { id: "EMA9",  label: "EMA 9",        colour: "#22d3ee", fn: (c: Candle[]) => [ema(c, 9)] },
-  { id: "EMA21", label: "EMA 21",       colour: "#8b5cf6", fn: (c: Candle[]) => [ema(c, 21)] },
-  { id: "SMA20", label: "SMA 20",       colour: "#f59e0b", fn: (c: Candle[]) => [sma(c, 20)] },
-  { id: "SMA50", label: "SMA 50",       colour: "#f472b6", fn: (c: Candle[]) => [sma(c, 50)] },
-  { id: "BB20",  label: "Bollinger 20", colour: "#2dd4bf", fn: (c: Candle[]) => { const b = bollinger(c, 20, 2); return [b.upper, b.mid, b.lower]; } },
-  { id: "VWAP",  label: "VWAP",         colour: "#facc15", fn: (c: Candle[]) => [vwap(c)] },
-] as const;
-
-/** Sub-pane studies. These have their own scale and cannot share the price axis. */
-const STUDIES = [
-  { id: "RSI14", label: "RSI 14", colour: "#e879f9" },
-  { id: "MACD",  label: "MACD",   colour: "#38bdf8" },
-  { id: "ATR14", label: "ATR 14", colour: "#fb923c" },
-] as const;
+/**
+ * One-click adds for what a desk reaches for constantly.
+ *
+ * The dialog is the complete answer, but making someone open a dialog, search and configure just to
+ * put RSI on the screen would be a regression over the four buttons this replaced. These add a
+ * default instance; the gear is for everything else and for tuning.
+ */
+const QUICK = [
+  { id: "EMA", label: "EMA" },
+  { id: "VWAP", label: "VWAP" },
+  { id: "BB", label: "Bollinger" },
+  { id: "RSI", label: "RSI" },
+  { id: "MACD", label: "MACD" },
+];
 
 const STORE = "oms_advchart";
+const SUB_HEIGHT = 138;
+/** Shared price-axis width so every pane's plot area starts at the same x. */
+const PRICE_SCALE_W = 74;
+
+/** Resolve a series' declared tone against the instance colour and the active theme. */
+function toneColour(tone: string | undefined, base: string): string {
+  switch (tone) {
+    case "muted": return cssRGB("--ink-500", 0.85);
+    case "bull": return cssRGB("--bull");
+    case "bear": return cssRGB("--bear");
+    // A signal line must be told apart from the line it signals. Fading the same hue is not enough
+    // on a 120px pane — %K and %D read as one thick line. Offsetting within the palette was no
+    // better: it landed amber next to yellow. A neutral light tone contrasts against every hue in
+    // the palette rather than against most of them, and follows the theme into daylight.
+    case "secondary": return cssRGB("--ink-200", 0.9);
+    default: return base;
+  }
+}
+
+/** lightweight-charts cannot parse "#rrggbb80", so alpha has to be expressed as comma-joined rgba. */
+function hexAlpha(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 export default function ChartPage() {
   const [secs, setSecs] = useState<Sec[]>([]);
   const [securityId, setSecurityId] = useState<number | null>(null);
   const [tf, setTf] = useState("5m");
   const [type, setType] = useState<(typeof TYPES)[number]["k"]>("candles");
-  const [overlays, setOverlays] = useState<string[]>(["EMA9", "VWAP"]);
-  const [study, setStudy] = useState<string | null>("RSI14");
+  const [applied, setApplied] = useState<Applied[]>([]);
+  const [dialog, setDialog] = useState(false);
   const [showMine, setShowMine] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [fills, setFills] = useState<Fill[]>([]);
@@ -82,15 +112,19 @@ export default function ChartPage() {
   const [offscreen, setOffscreen] = useState<Order[]>([]);
   const [fitOrders, setFitOrders] = useState(false);
   const [bars, setBars] = useState(0);
+  const [restored, setRestored] = useState(false);
 
   const priceRef = useRef<HTMLDivElement>(null);
-  const studyRef = useRef<HTMLDivElement>(null);
+  const subRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const sec = useMemo(() => secs.find((s) => s.securityId === securityId) || null, [secs, securityId]);
   const items: ComboItem[] = useMemo(
     () => secs.map((s) => ({ id: s.securityId, primary: s.symbol, secondary: s.name, extra: s.assetClass })),
     [secs],
   );
+
+  const priceOverlays = useMemo(() => applied.filter((a) => !a.hidden && byId(a.id)?.pane === "price"), [applied]);
+  const subStudies = useMemo(() => applied.filter((a) => !a.hidden && byId(a.id)?.pane === "sub"), [applied]);
 
   // restore the working set — a trader's chart setup is a preference, not a session detail
   useEffect(() => {
@@ -100,16 +134,24 @@ export default function ChartPage() {
         const p = JSON.parse(raw);
         if (p.tf) setTf(p.tf);
         if (p.type) setType(p.type);
-        if (Array.isArray(p.overlays)) setOverlays(p.overlays);
-        if ("study" in p) setStudy(p.study);
         if (typeof p.showMine === "boolean") setShowMine(p.showMine);
         if (p.securityId) setSecurityId(p.securityId);
+
+        // `indicators` is the current shape; overlays/study is what the first version wrote.
+        if (Array.isArray(p.indicators)) setApplied(reviveApplied(p.indicators));
+        else if (p.overlays || p.study) setApplied(migrateLegacy(p.overlays, p.study));
       }
     } catch { /* a corrupt preference must not block the chart */ }
+    setRestored(true);
   }, []);
+
   useEffect(() => {
-    try { localStorage.setItem(STORE, JSON.stringify({ tf, type, overlays, study, showMine, securityId })); } catch {}
-  }, [tf, type, overlays, study, showMine, securityId]);
+    // Do not write until the restore has run, or the empty initial state overwrites the saved setup.
+    if (!restored) return;
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ tf, type, showMine, securityId, indicators: applied }));
+    } catch {}
+  }, [restored, tf, type, showMine, securityId, applied]);
 
   useEffect(() => {
     get<Sec[]>("/api/market/watch?exchange=DSE")
@@ -187,13 +229,19 @@ export default function ChartPage() {
    */
   const ordersKey = orders.map((o) => `${o.id}:${o.side}:${o.price}:${o.quantity - (o.filledQty || 0)}`).join("|");
   const fillsKey = fills.map((f) => `${f.id}:${f.side}:${f.price}:${f.quantity}`).join("|");
+  const indicatorKey = applied
+    .map((a) => `${a.uid}:${a.id}:${a.colour}:${a.hidden ? 1 : 0}:${Object.entries(a.params).sort().map(([k, v]) => `${k}=${v}`).join(",")}`)
+    .join("|");
   const ordersRef = useRef(orders); ordersRef.current = orders;
   const fillsRef = useRef(fills); fillsRef.current = fills;
+  const appliedRef = useRef(applied); appliedRef.current = applied;
 
   // ---------------------------------------------------------------- draw
   useEffect(() => {
     if (!securityId) return;
-    let priceChart: any, studyChart: any, ro: ResizeObserver | null = null, dead = false;
+    let priceChart: any;
+    const subCharts: any[] = [];
+    let ro: ResizeObserver | null = null, dead = false;
 
     (async () => {
       const lib = await import("lightweight-charts");
@@ -210,11 +258,27 @@ export default function ChartPage() {
       // SMOOTHED series, not the market. Always compute studies from the real candles.
       const shown = type === "heikin" ? heikinAshi(raw) : raw;
 
+      const subs = appliedRef.current.filter((a) => !a.hidden && byId(a.id)?.pane === "sub");
+      const overlays = appliedRef.current.filter((a) => !a.hidden && byId(a.id)?.pane === "price");
+
+      /**
+       * Every pane must reserve the SAME price-scale width, or they do not line up.
+       *
+       * Each pane is its own chart and sizes its axis to its own labels — "4,575.00" on price
+       * against "100.00" on a stochastic — so the plot areas start at different x and a dip in the
+       * oscillator sits to the side of the bar that caused it. That silently misleads, which is
+       * worse than being ugly. A fixed minimum makes the plots share an origin.
+       */
+      const scale = { minimumWidth: PRICE_SCALE_W };
+
       priceRef.current.innerHTML = "";
       priceChart = lib.createChart(priceRef.current, {
         ...chartBase(lib, tf !== "1d"),
-        height: studyRef.current && study ? 420 : 560,
+        height: Math.max(240, 560 - subs.length * SUB_HEIGHT),
         crosshair: { mode: lib.CrosshairMode.Normal },
+        rightPriceScale: { ...chartBase(lib, tf !== "1d").rightPriceScale, ...scale },
+        // Only the bottom-most pane shows the time axis; repeating it under every pane is noise.
+        timeScale: { ...chartBase(lib, tf !== "1d").timeScale, visible: subs.length === 0 },
       });
 
       let main: any;
@@ -238,15 +302,32 @@ export default function ChartPage() {
         color: c.close >= c.open ? cssRGB("--bull", 0.4) : cssRGB("--bear", 0.4),
       })));
 
-      for (const o of OVERLAYS) {
-        if (!overlays.includes(o.id)) continue;
-        for (const series of o.fn(raw)) {
-          if (!series.length) continue;
-          const s = priceChart.addLineSeries({
-            color: o.colour, lineWidth: o.id === "BB20" ? 1 : 2,
+      // ---- price-pane overlays, one instance at a time
+      for (const a of overlays) {
+        const entry = byId(a.id);
+        if (!entry) continue;
+        let out;
+        try { out = entry.compute(raw, a.params); }
+        catch { continue; }         // one bad indicator must not take the whole chart down
+
+        for (const s of out.series) {
+          if (!s.points.length) continue;
+          const line = priceChart.addLineSeries({
+            color: toneColour(s.tone, a.colour),
+            lineWidth: s.width ?? 2,
+            lineStyle: s.dashed ? 2 : 0,
             priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
           });
-          s.setData(series);
+          line.setData(s.points);
+        }
+        // Levels on the price axis (floor pivots) are horizontal by definition, so they are price
+        // lines rather than series — they must not stretch the scale to reach a far-off level.
+        for (const lvl of out.levels || []) {
+          main.createPriceLine({
+            price: lvl.value,
+            color: lvl.muted ? hexAlpha(a.colour, 0.45) : a.colour,
+            lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: lvl.label,
+          });
         }
       }
 
@@ -291,6 +372,7 @@ export default function ChartPage() {
             anchor.setData([{ time: first, value: o.price }, { time: last, value: o.price }]);
           }
         }
+
         const myFills = fillsRef.current;
         if (myFills.length) {
           // Markers are anchored to the bar containing the order's timestamp. That is placement
@@ -341,48 +423,119 @@ export default function ChartPage() {
           : { time: p.time, open: d.value, high: d.value, low: d.value, close: d.value });
       });
 
-      // ---- the study pane
-      if (study && studyRef.current) {
-        studyRef.current.innerHTML = "";
-        studyChart = lib.createChart(studyRef.current, { ...chartBase(lib, tf !== "1d"), height: 150 });
-        if (study === "RSI14") {
-          const s = studyChart.addLineSeries({ color: "#e879f9", lineWidth: 2, lastValueVisible: true });
-          s.setData(rsi(raw, 14));
-          for (const lvl of [70, 30]) {
-            s.createPriceLine({ price: lvl, color: cssRGB("--ink-600", 0.7), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(lvl) });
+      // ---- one pane per sub-study
+      for (const a of subs) {
+        const host = subRefs.current[a.uid];
+        const entry = byId(a.id);
+        if (!host || !entry) continue;
+        let out;
+        try { out = entry.compute(raw, a.params); }
+        catch { continue; }
+
+        host.innerHTML = "";
+        const isLast = subs.indexOf(a) === subs.length - 1;
+        const base = chartBase(lib, tf !== "1d");
+        const chart = lib.createChart(host, {
+          ...base,
+          height: SUB_HEIGHT - 18,
+          rightPriceScale: { ...base.rightPriceScale, ...scale },
+          timeScale: { ...base.timeScale, visible: isLast },
+        });
+        subCharts.push(chart);
+
+        let first: any = null;
+        for (const s of out.series) {
+          if (!s.points.length) continue;
+          if (s.kind === "histogram") {
+            const h = chart.addHistogramSeries({ priceFormat: { type: "price" } });
+            h.setData(s.points.map((p: any) => ({
+              time: p.time, value: p.value,
+              // "signed" means the bar's own sign carries the meaning, so it overrides the
+              // instance colour — a MACD histogram in one flat colour says nothing.
+              color: s.tone === "signed"
+                ? (p.value >= 0 ? cssRGB("--bull", 0.5) : cssRGB("--bear", 0.5))
+                : hexAlpha(a.colour, 0.5),
+            })));
+            first = first || h;
+          } else {
+            const line = chart.addLineSeries({
+              color: toneColour(s.tone, a.colour),
+              lineWidth: s.width ?? 2,
+              lineStyle: s.dashed ? 2 : 0,
+              priceLineVisible: false,
+            });
+            line.setData(s.points);
+            first = first || line;
           }
-        } else if (study === "MACD") {
-          const m = macd(raw);
-          const h = studyChart.addHistogramSeries({ priceFormat: { type: "price" } });
-          h.setData(m.histogram.map((p) => ({
-            time: p.time, value: p.value,
-            color: p.value >= 0 ? cssRGB("--bull", 0.5) : cssRGB("--bear", 0.5),
-          })));
-          studyChart.addLineSeries({ color: "#38bdf8", lineWidth: 2, lastValueVisible: false }).setData(m.macd);
-          studyChart.addLineSeries({ color: "#f59e0b", lineWidth: 1, lastValueVisible: false }).setData(m.signal);
-        } else if (study === "ATR14") {
-          studyChart.addLineSeries({ color: "#fb923c", lineWidth: 2 }).setData(atr(raw, 14));
         }
-        studyChart.timeScale().fitContent();
-        // lock the two time axes together, or the crosshair means different things in each
-        priceChart.timeScale().subscribeVisibleLogicalRangeChange((r: any) => r && studyChart?.timeScale().setVisibleLogicalRange(r));
-        studyChart.timeScale().subscribeVisibleLogicalRangeChange((r: any) => r && priceChart?.timeScale().setVisibleLogicalRange(r));
+        for (const lvl of out.levels || []) {
+          if (!first) break;
+          first.createPriceLine({
+            price: lvl.value, color: cssRGB("--ink-600", 0.7),
+            lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: lvl.label,
+          });
+        }
+        if (out.range) {
+          // A bounded oscillator should show its own bounds and no more — a 0..100 stochastic with
+          // a 120 gridline invites the reading that 100 is not the ceiling. Tight margins keep the
+          // 80/20 reference lines meaningful instead of floating in dead space.
+          chart.priceScale("right").applyOptions({ autoScale: false, scaleMargins: { top: 0.04, bottom: 0.04 } });
+          first?.applyOptions?.({
+            autoscaleInfoProvider: () => ({ priceRange: { minValue: out.range!.min, maxValue: out.range!.max } }),
+          });
+        }
+        chart.timeScale().fitContent();
+      }
+
+      /**
+       * Lock every pane to the same time axis.
+       *
+       * Without the `syncing` guard each pane's own change handler re-fires the others, which
+       * re-fire it — the panes fight, the crosshair stutters and the range creeps. The flag makes
+       * propagation one-way per gesture.
+       */
+      const all = [priceChart, ...subCharts];
+      let syncing = false;
+      for (const src of all) {
+        src.timeScale().subscribeVisibleLogicalRangeChange((r: any) => {
+          if (!r || syncing) return;
+          syncing = true;
+          for (const dst of all) if (dst !== src) dst.timeScale().setVisibleLogicalRange(r);
+          syncing = false;
+        });
       }
 
       const resize = () => {
         if (priceRef.current) priceChart.applyOptions({ width: priceRef.current.clientWidth });
-        if (studyRef.current && studyChart) studyChart.applyOptions({ width: studyRef.current.clientWidth });
+        for (const a of subs) {
+          const host = subRefs.current[a.uid];
+          const idx = subs.indexOf(a);
+          if (host && subCharts[idx]) subCharts[idx].applyOptions({ width: host.clientWidth });
+        }
       };
       resize();
       ro = new ResizeObserver(resize);
       ro.observe(priceRef.current);
     })();
 
-    return () => { dead = true; ro?.disconnect(); priceChart?.remove?.(); studyChart?.remove?.(); };
-  }, [securityId, tf, type, overlays, study, showMine, fitOrders, ordersKey, fillsKey]);
+    return () => {
+      dead = true;
+      ro?.disconnect();
+      priceChart?.remove?.();
+      for (const c of subCharts) c?.remove?.();
+    };
+  }, [securityId, tf, type, showMine, fitOrders, ordersKey, fillsKey, indicatorKey]);
 
-  const toggle = (list: string[], id: string, set: (v: string[]) => void) =>
-    set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const quickAdd = (id: string) => {
+    const existing = applied.filter((a) => a.id === id);
+    // A quick button toggles: press it again and the instances it stands for come off, so it can
+    // never become a one-way door that silently stacks duplicates.
+    if (existing.length) setApplied(applied.filter((a) => a.id !== id));
+    else {
+      const a = newApplied(id, applied.length);
+      if (a) setApplied([...applied, a]);
+    }
+  };
 
   const pill = (on: boolean) =>
     `rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
@@ -407,7 +560,6 @@ export default function ChartPage() {
               <span className="truncate text-[11px] text-ink-400">{sec.name}</span>
             </>
           )}
-          {/* crosshair readout */}
           {ohlc && (
             <span className="ml-auto flex gap-3 text-[11px] tabular-nums text-ink-300">
               <span>O <span className="text-ink-100">{nf(ohlc.open)}</span></span>
@@ -430,23 +582,33 @@ export default function ChartPage() {
             {TYPES.map((t) => <button key={t.k} onClick={() => setType(t.k)} className={pill(type === t.k)}>{t.label}</button>)}
           </div>
 
-          <span className="ml-2 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">Overlays</span>
+          <span className="ml-2 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">Quick</span>
           <div className="flex flex-wrap gap-1">
-            {OVERLAYS.map((o) => (
-              <button key={o.id} onClick={() => toggle(overlays, o.id, setOverlays)}
-                className={`rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors ${
-                  overlays.includes(o.id) ? "border-transparent" : "border-line text-ink-400 hover:text-ink-100"}`}
-                style={overlays.includes(o.id) ? { color: o.colour, background: `${o.colour}22` } : undefined}>
-                {o.label}
-              </button>
-            ))}
+            {QUICK.map((q) => {
+              const on = applied.some((a) => a.id === q.id);
+              return (
+                <button key={q.id} onClick={() => quickAdd(q.id)}
+                  title={byId(q.id)?.hint}
+                  className={`rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                    on ? "border-aurora-cyan/50 bg-aurora-cyan/15 text-aurora-cyan" : "border-line text-ink-300 hover:bg-white/5 hover:text-ink-100"}`}>
+                  {q.label}
+                </button>
+              );
+            })}
           </div>
 
-          <span className="ml-2 text-[9px] font-bold uppercase tracking-[0.14em] text-aurora-cyan">Study</span>
-          <div className="flex rounded-lg border border-line p-0.5">
-            <button onClick={() => setStudy(null)} className={pill(study === null)}>None</button>
-            {STUDIES.map((s) => <button key={s.id} onClick={() => setStudy(s.id)} className={pill(study === s.id)}>{s.label}</button>)}
-          </div>
+          {/* the gear */}
+          <button onClick={() => setDialog(true)}
+            title="Add, tune and remove indicators"
+            className={`ml-2 flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+              applied.length ? "border-aurora-indigo/50 bg-aurora-indigo/15 text-ink-100" : "border-line text-ink-300 hover:bg-white/5"}`}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8"
+                 strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.63.68 1.09 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            Indicators{applied.length ? ` (${applied.length})` : ""}
+          </button>
 
           <button
             onClick={() => setShowMine((v) => !v)}
@@ -458,26 +620,54 @@ export default function ChartPage() {
         </div>
 
         {/* the chart */}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-obsidian-900/40 p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-line bg-obsidian-900/40 p-2">
           {bars === 0 && (
             <div className="flex h-full items-center justify-center text-[12px] text-ink-400">
               No candles for this instrument and interval yet — it needs prints on the tape to build bars.
             </div>
           )}
-          <div ref={priceRef} className="w-full" />
-          {study && (
-            <div className="mt-1 border-t border-line pt-1">
-              <div className="mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-wider"
-                   style={{ color: STUDIES.find((s) => s.id === study)?.colour }}>
-                {STUDIES.find((s) => s.id === study)?.label}
-              </div>
-              <div ref={studyRef} className="w-full" />
+
+          {/* overlay legend — which line is which, without hovering */}
+          {priceOverlays.length > 0 && (
+            <div className="mb-1 flex flex-wrap gap-1.5 px-1">
+              {priceOverlays.map((a) => (
+                <span key={a.uid} title={byId(a.id)?.hint}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                  style={{ color: a.colour, background: hexAlpha(a.colour, 0.12) }}>
+                  <span className="inline-block h-[2px] w-3 rounded" style={{ background: a.colour }} />
+                  {describe(a)}
+                </span>
+              ))}
             </div>
           )}
+
+          <div ref={priceRef} className="w-full" />
+
+          {subStudies.map((a) => (
+            <div key={a.uid} className="mt-1 border-t border-line pt-1">
+              <div className="mb-0.5 flex items-center gap-2 px-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: a.colour }}>
+                  {describe(a)}
+                </span>
+                <span className="truncate text-[10px] text-ink-500">{byId(a.id)?.hint}</span>
+                <button onClick={() => setApplied(applied.filter((x) => x.uid !== a.uid))}
+                  title="Remove this study"
+                  className="ml-auto rounded px-1.5 text-[12px] leading-none text-ink-500 hover:bg-bear/15 hover:text-bear">
+                  ×
+                </button>
+              </div>
+              <div ref={(el) => { subRefs.current[a.uid] = el; }} className="w-full" />
+            </div>
+          ))}
         </div>
 
         <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line bg-obsidian-900/60 px-3 py-1.5 text-[11px] text-ink-400">
           <span>{bars} bars · {TFS.find((t) => t.k === tf)?.label ?? tf}</span>
+          {applied.length > 0 && (
+            <span className="text-ink-300">
+              {priceOverlays.length} overlay{priceOverlays.length === 1 ? "" : "s"} · {subStudies.length} pane{subStudies.length === 1 ? "" : "s"}
+            </span>
+          )}
           {showMine && orders.length > 0 && (
             <span className="text-aurora-cyan">
               {orders.length} working order{orders.length === 1 ? "" : "s"} drawn as price lines
@@ -502,6 +692,8 @@ export default function ChartPage() {
           <span className="ml-auto">Built on TradingView Lightweight Charts</span>
         </div>
       </div>
+
+      <IndicatorDialog open={dialog} applied={applied} onClose={() => setDialog(false)} onChange={setApplied} />
     </Shell>
   );
 }
