@@ -143,7 +143,14 @@ public class ExecutionService {
     private void recordFill(OmsOrder o, long qty, BigDecimal px, Message msg) throws Exception {
         Trade t = new Trade();
         String execId = msg.isSetField(ExecID.FIELD) ? msg.getString(ExecID.FIELD) : String.valueOf(System.currentTimeMillis());
-        t.setTradeRef("FIX-" + execId);
+        /*
+         * The order id rides along in the ref because the venue's ExecID is only unique within ONE
+         * venue session: nFIX restarted, reset its numbering, and a fresh fill arrived as ExecID 5 —
+         * which we had already recorded from the previous session. The insert hit the trade_ref
+         * unique key and the whole ExecutionReport aborted, INCLUDING the status update below it.
+         * A true FIX resend (PossDup) repeats both the ExecID and the order, so dedup still works.
+         */
+        t.setTradeRef("FIX-" + execId + "-" + o.getId());
         t.setSecurityId(o.getSecurityId());
         if ("BUY".equals(o.getSide())) t.setBuyOrderId(o.getId()); else t.setSellOrderId(o.getId());
         t.setPrice(px);
@@ -151,6 +158,16 @@ public class ExecutionService {
         t.setAggressorSide(o.getSide());
         t.setExecutedAt(LocalDateTime.now());
         stampBondEconomics(t, o, px, msg);
+        /*
+         * Check, don't catch. onExecutionReport is @Transactional, and a constraint violation
+         * inside it marks the transaction rollback-only — catching the exception would not save
+         * the status update that follows; the whole thing still rolls back at commit. Asking
+         * first keeps the transaction healthy. No race: QuickFIX delivers on a single thread.
+         */
+        if (tradeRepo.existsByTradeRef(t.getTradeRef())) {
+            log.info("FIX fill {} already recorded — duplicate delivery skipped", t.getTradeRef());
+            return;
+        }
         tradeRepo.save(t);
 
         if (o.getAccountId() != null) portfolio.applyFill(o.getAccountId(), o.getSecurityId(), o.getSide(), qty, px);
