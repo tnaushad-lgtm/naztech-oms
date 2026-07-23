@@ -166,7 +166,33 @@ export default function Connectivity() {
             <Row k="Transport" v={itch.transport} />
             <Row k="Depth source" v={itch.depthSource} />
             <Row k="Enabled" v={itch.enabled ? "yes" : "no"} />
+            {itch.feed?.session && <Row k="Venue session" v={itch.feed.session} />}
           </div>
+
+          {/*
+            The venue's last restart, detected from the feed itself — the session name changed and
+            the sequence rolled back, so no cooperation from the venue is needed to know. It gets a
+            loud panel because of what it implies: every working order placed before this moment no
+            longer exists at the exchange, and the empty depth ladder that follows is correct, not
+            broken. This is the answer to "why is my book empty" arriving before the question.
+          */}
+          {itch.venueRestart && (
+            <div className="glass mt-4 border border-amber-400/30 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <div className="panel-title">Venue Restart Detected</div>
+                <span className="chip bg-amber-400/15 text-amber-300">
+                  {itch.venueRestart.countSinceStartup}× since our startup
+                </span>
+              </div>
+              <Row k="Last restart" v={new Date(itch.venueRestart.at).toLocaleString()} />
+              <Row k="New session" v={itch.venueRestart.session} />
+              <p className="mt-2 text-[11px] leading-relaxed text-amber-300/90">
+                nFIX restarted and voided its order book. Working orders placed before this moment are
+                no longer known to the exchange — cancel and re-enter them. Depth ladders rebuild
+                automatically from the new session.
+              </p>
+            </div>
+          )}
 
           <div className="glass mt-4 p-4">
             <div className="panel-title mb-2">Switching to live DSE</div>

@@ -363,6 +363,17 @@ public class ItchGateway implements MarketDataGateway {
             // consuming the replay — otherwise resting orders from the previous session linger as
             // phantom liquidity next to the fresh book. The replay then rebuilds each book from scratch.
             if (source instanceof SoupBinTcpSource soup && soup.consumeSessionReset()) {
+                /*
+                 * The venue restart itself is information the desk wants: after one, every working
+                 * order placed before it is an orphan the exchange has forgotten, and "why is my
+                 * depth empty" lands on support. The feed announces restarts implicitly — session
+                 * name change + sequence rollback — so record it here and let the dashboard say it,
+                 * rather than waiting for the venue to add an explicit broadcast.
+                 */
+                lastVenueRestartAt = java.time.Instant.now();
+                lastVenueRestartSession = soup.sessionName();
+                venueRestarts.incrementAndGet();
+                stream.publish("session", Map.of("venueRestart", lastVenueRestartSession));
                 log.warn("ITCH: venue restarted — clearing {} books to rebuild from the replay", books.size());
                 for (ItchOrderBook b : books.values()) b.clear();
                 orderToSecurity.clear();
@@ -567,6 +578,15 @@ public class ItchGateway implements MarketDataGateway {
             dirWriter = t;
         }
     }
+
+    /** When the venue last restarted (ITCH session change + sequence rollback), for the dashboard. */
+    private volatile java.time.Instant lastVenueRestartAt;
+    private volatile String lastVenueRestartSession = "";
+    private final java.util.concurrent.atomic.AtomicInteger venueRestarts = new java.util.concurrent.atomic.AtomicInteger();
+
+    public java.time.Instant lastVenueRestartAt() { return lastVenueRestartAt; }
+    public String lastVenueRestartSession() { return lastVenueRestartSession; }
+    public int venueRestartCount() { return venueRestarts.get(); }
 
     private void onSystemEvent(Itch.SystemEvent s) {
         char code = Character.toUpperCase(s.eventCode());

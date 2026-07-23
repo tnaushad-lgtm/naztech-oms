@@ -86,6 +86,15 @@ public class ConnectivityController {
         // Feed health, but only a live transport has any: the simulator and a replay cannot lose a
         // message, so reporting "0 gaps" for them would be a claim about nothing.
         if (marketDataGateway instanceof com.naztech.oms.exchange.itch.ItchGateway gw) {
+            // The venue's last restart, detected from the feed itself (session change + sequence
+            // rollback). After one, working orders placed before it no longer exist at the exchange.
+            if (gw.lastVenueRestartAt() != null) {
+                Map<String, Object> vr = new LinkedHashMap<>();
+                vr.put("at", gw.lastVenueRestartAt().toString());
+                vr.put("session", gw.lastVenueRestartSession());
+                vr.put("countSinceStartup", gw.venueRestartCount());
+                itchMap.put("venueRestart", vr);
+            }
             var health = gw.feedHealth();
             if (health != null) {
                 Map<String, Object> feed = new LinkedHashMap<>();
