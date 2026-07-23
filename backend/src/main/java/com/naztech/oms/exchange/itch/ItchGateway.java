@@ -491,6 +491,83 @@ public class ItchGateway implements MarketDataGateway {
      * closes a session invalidates the book, so both ends clear it; the replay that follows rebuilds
      * the current session from its own messages.
      */
+    /**
+     * The venue's instrument directory — board, share category and sector, live from the feed.
+     *
+     * nFIX now populates group (MAIN/SME/ATB), listingType (the DSE share category A/B/N/Z/G) and
+     * sector in its [R] messages, and this is the venue-owned truth for those columns: the local
+     * seed only ever guessed them. The tick thread does nothing but drop the message into a map —
+     * the DB write happens on its own thread below, because persisting inline on the tick is
+     * exactly the mistake that once froze the whole feed for 42 seconds a page.
+     *
+     * The map (not a queue) also coalesces: a reconnect replays the directory again, and 300
+     * unchanged rows should cost one comparison each, not 300 UPDATEs.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Itch.OrderbookDirectory> pendingDirectory =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private Thread dirWriter;
+
+    private void onDirectory(Itch.OrderbookDirectory r) {
+        pendingDirectory.put(r.orderbook(), r);
+        startDirWriter();
+    }
+
+    /**
+     * DSE sector names truncated by the 12-byte wire field, expanded back to the official names.
+     * "Pharmaceutic" on a screener filter reads as a bug; the venue means Pharmaceuticals & Chemicals.
+     */
+    private static final Map<String, String> SECTOR_FULL = Map.of(
+            "Pharmaceutic", "Pharmaceuticals & Chemicals",
+            "Telecommunic", "Telecommunication",
+            "Food & Allie", "Food & Allied",
+            "Paper & Prin", "Paper & Printing",
+            "Services & R", "Services & Real Estate",
+            "Miscellaneou", "Miscellaneous");
+
+    private void startDirWriter() {
+        if (dirWriter != null) return;
+        synchronized (this) {
+            if (dirWriter != null) return;
+            Thread t = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        Thread.sleep(1500);              // directory bursts settle; batch them
+                        if (pendingDirectory.isEmpty()) continue;
+                        List<Long> ids = new ArrayList<>(pendingDirectory.keySet());
+                        int changed = 0;
+                        for (Long id : ids) {
+                            Itch.OrderbookDirectory r = pendingDirectory.remove(id);
+                            if (r == null) continue;
+                            var sec = securityRepo.findById(id).orElse(null);
+                            if (sec == null) continue;   // bonds etc. — not in the venue directory
+                            boolean dirty = false;
+                            String board = r.group() == null ? "" : r.group().trim();
+                            if (!board.isEmpty() && !board.equals(sec.getBoard())) { sec.setBoard(board); dirty = true; }
+                            String cat = String.valueOf(r.listingType()).trim();
+                            if (!cat.isEmpty() && !cat.equals(sec.getCategory())) { sec.setCategory(cat); dirty = true; }
+                            String raw = r.sector() == null ? "" : r.sector().trim();
+                            String sector = SECTOR_FULL.getOrDefault(raw, raw);
+                            if (!sector.isEmpty() && !sector.equals(sec.getSector())) { sec.setSector(sector); dirty = true; }
+                            if (dirty) { securityRepo.save(sec); changed++; }
+                        }
+                        if (changed > 0) {
+                            log.info("ITCH directory: updated board/category/sector on {} securities from the venue", changed);
+                            stream.publish("market", Map.of("directory", changed));
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (Exception e) {
+                        // One bad row must not kill the writer and silently freeze the directory.
+                        log.warn("ITCH: directory persist failed ({}) — continuing", e.toString());
+                    }
+                }
+            }, "itch-dir-writer");
+            t.setDaemon(true);
+            t.start();
+            dirWriter = t;
+        }
+    }
+
     private void onSystemEvent(Itch.SystemEvent s) {
         char code = Character.toUpperCase(s.eventCode());
         boolean boundary = code == 'O' || code == 'S' || code == 'C' || code == 'E';
@@ -531,6 +608,7 @@ public class ItchGateway implements MarketDataGateway {
             case 'Q' -> onTrade((Itch.Trade) m);
             case 'Z' -> onIndex((Itch.IndexValue) m);
             case 'S' -> onSystemEvent((Itch.SystemEvent) m);
+            case 'R' -> onDirectory((Itch.OrderbookDirectory) m);
             default -> { /* T/R/H/O/I/N — not book-affecting here */ }
         }
     }

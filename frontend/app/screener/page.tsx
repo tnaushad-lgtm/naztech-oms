@@ -11,7 +11,28 @@ import { nf, pct, compact, dirColor, assetLabel } from "@/lib/format";
 
 type Row = {
   securityId: number; exchange: string; symbol: string; name: string; assetClass: string; sector: string;
+  board: string; category: string;
   ltp: number; changePct: number; volume: number; valueMn: number; high: number; low: number;
+};
+
+/**
+ * DSE share-category badge colours. The category is a solvency/compliance grading the whole market
+ * reads at a glance — A regular, B weaker, N newly listed, Z non-compliant, G greenfield — so the
+ * colours follow that meaning rather than decoration: settled green, caution amber, problem red.
+ */
+const CAT_STYLE: Record<string, string> = {
+  A: "bg-bull/20 text-bull",
+  B: "bg-aurora-cyan/20 text-aurora-cyan",
+  N: "bg-amber-400/20 text-amber-300",
+  Z: "bg-bear/25 text-bear",
+  G: "bg-aurora-violet/20 text-aurora-violet",
+};
+const CAT_HINT: Record<string, string> = {
+  A: "Category A — regular AGMs, ≥10% dividend",
+  B: "Category B — regular AGMs, dividend below 10%",
+  N: "Category N — newly listed",
+  Z: "Category Z — no AGM / no dividend / operations halted",
+  G: "Category G — greenfield company",
 };
 
 export default function Screener() {
@@ -21,6 +42,8 @@ export default function Screener() {
   const [q, setQ] = useState("");
   const [asset, setAsset] = useState("ALL");
   const [sector, setSector] = useState("ALL");
+  const [board, setBoard] = useState("ALL");
+  const [cat, setCat] = useState("ALL");
   const [dir, setDir] = useState("ALL"); // ALL/GAINERS/LOSERS
   const [minPrice, setMinPrice] = useState<string>("");
   const [maxPrice, setMaxPrice] = useState<string>("");
@@ -36,12 +59,16 @@ export default function Screener() {
 
   const sectors = useMemo(() => Array.from(new Set(rows.map((r) => r.sector).filter(Boolean))).sort(), [rows]);
   const assets = useMemo(() => Array.from(new Set(rows.map((r) => r.assetClass))).sort(), [rows]);
+  const boards = useMemo(() => Array.from(new Set(rows.map((r) => r.board).filter(Boolean))).sort(), [rows]);
+  const cats = useMemo(() => Array.from(new Set(rows.map((r) => r.category).filter(Boolean))).sort(), [rows]);
 
   const filtered = useMemo(() => {
     let out = rows.filter((r) => r.assetClass !== "INDEX");
     if (q) out = out.filter((r) => (r.symbol + " " + r.name).toLowerCase().includes(q.toLowerCase()));
     if (asset !== "ALL") out = out.filter((r) => r.assetClass === asset);
     if (sector !== "ALL") out = out.filter((r) => r.sector === sector);
+    if (board !== "ALL") out = out.filter((r) => r.board === board);
+    if (cat !== "ALL") out = out.filter((r) => r.category === cat);
     if (dir === "GAINERS") out = out.filter((r) => r.changePct > 0);
     if (dir === "LOSERS") out = out.filter((r) => r.changePct < 0);
     if (minPrice) out = out.filter((r) => r.ltp >= parseFloat(minPrice));
@@ -52,7 +79,7 @@ export default function Screener() {
       return asc ? c : -c;
     });
     return out;
-  }, [rows, q, asset, sector, dir, minPrice, maxPrice, sortKey, asc]);
+  }, [rows, q, asset, sector, board, cat, dir, minPrice, maxPrice, sortKey, asc]);
 
   const sortBy = (k: keyof Row) => { if (sortKey === k) setAsc(!asc); else { setSortKey(k); setAsc(false); } };
   const arrow = (k: keyof Row) => sortKey === k ? (asc ? " ▲" : " ▼") : "";
@@ -78,7 +105,7 @@ export default function Screener() {
     <Shell title="Market Screener" connected={connected} headerRight={header}>
       {/* filters */}
       <div className="glass mb-4 p-4">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5 lg:grid-cols-9">
           <input className="field" placeholder="Search symbol/name…" value={q} onChange={(e) => setQ(e.target.value)} />
           <select className="field" value={asset} onChange={(e) => setAsset(e.target.value)}>
             <option value="ALL" className="bg-obsidian-850">All assets</option>
@@ -87,6 +114,14 @@ export default function Screener() {
           <select className="field" value={sector} onChange={(e) => setSector(e.target.value)}>
             <option value="ALL" className="bg-obsidian-850">All sectors</option>
             {sectors.map((s) => <option key={s} value={s} className="bg-obsidian-850">{s}</option>)}
+          </select>
+          <select className="field" value={board} onChange={(e) => setBoard(e.target.value)}>
+            <option value="ALL" className="bg-obsidian-850">All boards</option>
+            {boards.map((b) => <option key={b} value={b} className="bg-obsidian-850">{b}</option>)}
+          </select>
+          <select className="field" value={cat} onChange={(e) => setCat(e.target.value)}>
+            <option value="ALL" className="bg-obsidian-850">All categories</option>
+            {cats.map((c) => <option key={c} value={c} className="bg-obsidian-850">Category {c}</option>)}
           </select>
           <select className="field" value={dir} onChange={(e) => setDir(e.target.value)}>
             <option value="ALL" className="bg-obsidian-850">All movers</option>
@@ -109,7 +144,7 @@ export default function Screener() {
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 bg-obsidian-850/95 text-[10px] uppercase tracking-wider text-ink-600">
               <tr className="text-left">
-                {[["symbol", "Symbol"], ["sector", "Sector"], ["assetClass", "Asset"]].map(([k, l]) => (
+                {[["symbol", "Symbol"], ["sector", "Sector"], ["board", "Board"], ["assetClass", "Asset"]].map(([k, l]) => (
                   <th key={k} className="cursor-pointer px-3 py-2 hover:text-ink-200" onClick={() => sortBy(k as keyof Row)}>{l}{arrow(k as keyof Row)}</th>
                 ))}
                 {[["ltp", "LTP"], ["changePct", "Chg%"], ["volume", "Volume"], ["valueMn", "Turnover"], ["high", "High"], ["low", "Low"]].map(([k, l]) => (
@@ -121,8 +156,19 @@ export default function Screener() {
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.securityId} className="border-t border-line/[0.1] hover:bg-surface/[0.05]">
-                  <td className="px-3 py-2 font-semibold text-ink-100"><Highlight text={r.symbol} q={q} /></td>
+                  <td className="px-3 py-2 font-semibold text-ink-100">
+                    <span className="flex items-center gap-1.5">
+                      <Highlight text={r.symbol} q={q} />
+                      {r.category && (
+                        <span title={CAT_HINT[r.category] || `Category ${r.category}`}
+                              className={`chip px-1 text-[9px] font-bold ${CAT_STYLE[r.category] || "bg-surface/[0.1] text-ink-400"}`}>
+                          {r.category}
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-ink-400"><Highlight text={r.sector || "—"} q={q} /></td>
+                  <td className="px-3 py-2 text-ink-400">{r.board || "—"}</td>
                   <td className="px-3 py-2"><span className="chip bg-surface/[0.1] text-ink-500">{assetLabel(r.assetClass)}</span></td>
                   <td className="px-3 py-2 text-right tnum text-ink-200">{nf(r.ltp)}</td>
                   <td className={`px-3 py-2 text-right tnum font-semibold ${dirColor(r.changePct)}`}>{pct(r.changePct)}</td>
@@ -137,7 +183,7 @@ export default function Screener() {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={10} className="px-3 py-10 text-center text-ink-600">No matches — adjust filters.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={11} className="px-3 py-10 text-center text-ink-600">No matches — adjust filters.</td></tr>}
             </tbody>
           </table>
         </div>

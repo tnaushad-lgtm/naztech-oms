@@ -59,7 +59,8 @@ public final class Dtos {
     // ---- market data ----
     public record MarketRow(
             Long securityId, String exchange, String symbol, String name, String assetClass,
-            String sector, BigDecimal ltp, BigDecimal changeAbs, BigDecimal changePct,
+            String sector, String board, String category,
+            BigDecimal ltp, BigDecimal changeAbs, BigDecimal changePct,
             BigDecimal bid, BigDecimal ask, Long volume, BigDecimal valueMn,
             BigDecimal high, BigDecimal low, BigDecimal ycp, String status) {}
 

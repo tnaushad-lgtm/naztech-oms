@@ -143,6 +143,7 @@ public class MarketDataService {
         BigDecimal changePct = (m == null) ? BigDecimal.ZERO : nz(m.getChangePct());
         return new MarketRow(
                 s.getId(), exCode, s.getSymbol(), s.getName(), s.getAssetClass(), s.getSector(),
+                s.getBoard(), s.getCategory(),
                 ltp, changeAbs, changePct,
                 m == null ? BigDecimal.ZERO : nz(m.getBid()),
                 m == null ? BigDecimal.ZERO : nz(m.getAsk()),
