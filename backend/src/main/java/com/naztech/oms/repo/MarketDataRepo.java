@@ -18,10 +18,11 @@ public interface MarketDataRepo extends JpaRepository<MarketData, Long> {
      * ITCH feed is about to rebuild the whole day from a full replay (market open, or a venue restart) —
      * the replay re-adds every trade, so the running totals must start from nothing or each restart
      * stacks another day on top. Last price, YCP and bid/ask are left alone: the replay overwrites LTP,
-     * YCP is yesterday's close, and open/high/low rebuild from the first replayed trade.
+     * YCP is yesterday's close. open/high/low are set to 0 (those columns are NOT NULL) — and 0 is
+     * exactly what {@code applyTrade} reads as "unset", so the first replayed trade seeds them cleanly.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update MarketData m set m.volume = 0, m.trades = 0, m.valueMn = 0, "
-            + "m.openPrice = null, m.highPrice = null, m.lowPrice = null where m.securityId in :ids")
+            + "m.openPrice = 0, m.highPrice = 0, m.lowPrice = 0 where m.securityId in :ids")
     int resetDayStats(@Param("ids") Collection<Long> ids);
 }
